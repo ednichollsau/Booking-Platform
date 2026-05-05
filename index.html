@@ -64,6 +64,7 @@
 
     const SUPABASE_URL = 'https://bdzasnbzyfkqojqqucil.supabase.co'
     const SUPABASE_KEY = 'sb_publishable_XOH_-PTfkNsPhwY5eMV_Tg_M9GPbWE5'
+    const STRIPE_PUBLISHABLE_KEY = 'pk_test_51SY2F7RwdSqO1UREvGhx9E7bGQb0qF29zbqW9QZ6bLlREzHPZ0kcloIfqVVY30aSyBFjXq2XOeMKeJFaq6lstsat006cFJHzxr'
     const sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
       auth: { detectSessionInUrl: true, flowType: 'pkce', persistSession: true }
     })
@@ -340,7 +341,7 @@
               <div class="flex justify-between pt-3 text-sm text-[var(--text-muted)]"><div>Expires</div><div>12 months from purchase</div></div>
             </div>
             <button id="buy-btn" class="btn-primary w-full py-4 rounded-lg font-semibold">Purchase package — ${fmt.money(p.price_pence)}</button>
-            <p class="text-xs text-center text-[var(--text-muted)] mt-3">Payment processing coming soon. For now, package activates immediately on confirmation.</p>
+            <p class="text-xs text-center text-[var(--text-muted)] mt-3">Secure payment via Stripe. Test mode — use card 4242 4242 4242 4242.</p>
           </div>
         </div>
       `
@@ -357,29 +358,87 @@
 
     async function purchasePackageAndContinue() {
       const p = state.selectedPackage
-      const expiry = new Date(); expiry.setDate(expiry.getDate() + p.expiry_days)
-      const { data: cp, error } = await sb.from('customer_packages').insert({
-        customer_id: state.customer.id,
-        package_id: p.id,
-        expires_at: expiry.toISOString(),
-        amount_paid_pence: p.price_pence,
-        status: 'active'
-      }).select().single()
-      if (error) { alert('Error: ' + error.message); return }
+      // Save intent so we can restore after Stripe redirect
+      persistIntent()
+      // Get a fresh access token for the edge function
+      const { data: { session: authSession } } = await sb.auth.getSession()
+      if (!authSession) { alert('Please sign in again.'); setView('auth-request'); return }
+      try {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/create-checkout-session`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${authSession.access_token}`,
+            'apikey': SUPABASE_KEY,
+          },
+          body: JSON.stringify({
+            packageId: p.id,
+            returnUrl: window.location.origin + window.location.pathname,
+          }),
+        })
+        const result = await response.json()
+        if (result.error) throw new Error(result.error)
+        if (!result.url) throw new Error('No checkout URL returned')
+        // Redirect to Stripe Checkout
+        window.location.href = result.url
+      } catch (err) {
+        alert('Payment setup failed: ' + err.message)
+      }
+    }
+
+    async function handleStripeReturn(sessionId) {
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto text-center py-16">
+          <div class="display text-2xl mb-4">Activating your package…</div>
+          <div class="text-[var(--text-muted)]">This usually takes a few seconds.</div>
+          <div class="mt-8 flex justify-center"><div class="animate-pulse text-[var(--primary)]">●●●</div></div>
+        </div>
+      `
+      // Wait for auth to settle
+      const { data: { session: authSession } } = await sb.auth.getSession()
+      if (!authSession) {
+        viewEl.innerHTML = `<div class="view max-w-md mx-auto text-center py-16"><h2 class="display text-2xl mb-3">Please sign in</h2><p class="text-[var(--text-muted)] mb-6">Your payment was successful, but we need you to sign in to view your package.</p><a href="${window.location.pathname}" class="btn-primary inline-block px-6 py-3 rounded-lg">Sign in</a></div>`
+        return
+      }
+      state.authUser = authSession.user
+      updateAuthStatus()
+      await loadCustomer()
+      // Poll for the customer_package created by the webhook
+      let cp = null, attempts = 0
+      while (attempts < 30 && !cp) {
+        const { data } = await sb.from('customer_packages')
+          .select('*').eq('stripe_payment_id', sessionId).maybeSingle()
+        if (data) { cp = data; break }
+        await new Promise(r => setTimeout(r, 500))
+        attempts++
+      }
+      if (!cp) {
+        viewEl.innerHTML = `<div class="view max-w-md mx-auto text-center py-16"><h2 class="display text-2xl mb-3">Almost there</h2><p class="text-[var(--text-muted)] mb-6">Your payment was received but the package is taking longer than expected to activate. Please refresh the page in a moment, or contact us if it doesn't appear.</p><button onclick="window.location.reload()" class="btn-primary px-6 py-3 rounded-lg">Refresh</button></div>`
+        return
+      }
       state.customerPackage = cp
-      const contents = state.packageContents[p.id] || []
-      const balances = contents.map(c => ({
-        customer_package_id: cp.id,
-        service_id: c.service_id,
-        sessions_remaining: c.quantity
-      }))
-      await sb.from('customer_package_balances').insert(balances)
+      state.selectedPackage = state.packages.find(p => p.id === cp.package_id)
+      restoreIntent()
+      // Clean URL
+      window.history.replaceState({}, '', window.location.pathname)
+      // Continue to next step
+      const contents = state.packageContents[state.selectedPackage.id] || []
       if (contents.length === 1) {
         state.selectedService = state.services.find(s => s.id === contents[0].service_id)
-        setView('date-select')
+        setView('date-select', false)
       } else {
-        setView('pick-package-service')
+        setView('pick-package-service', false)
       }
+    }
+
+    function handleStripeCancel() {
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto text-center py-16">
+          <h2 class="display text-2xl mb-3">Payment cancelled</h2>
+          <p class="text-[var(--text-muted)] mb-6">No charge was made. Your booking wasn't completed.</p>
+          <a href="${window.location.pathname}" class="btn-primary inline-block px-6 py-3 rounded-lg">Try again</a>
+        </div>
+      `
     }
 
     function renderPickPackageService() {
@@ -682,6 +741,17 @@
           state.authUser = session.user
           updateAuthStatus()
           await loadCustomer()
+        }
+        // Check for Stripe return
+        const params = new URLSearchParams(window.location.search)
+        if (params.get('stripe_success') === '1') {
+          await handleStripeReturn(params.get('session_id'))
+          return
+        }
+        if (params.get('stripe_cancel') === '1') {
+          window.history.replaceState({}, '', window.location.pathname)
+          handleStripeCancel()
+          return
         }
         render()
       } catch (err) {
