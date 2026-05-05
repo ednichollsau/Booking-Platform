@@ -141,20 +141,47 @@
 
     function showCheckEmail(email) {
       authContent.innerHTML = `
-        <div class="text-center">
-          <div class="w-12 h-12 mx-auto mb-4 rounded-full bg-[var(--primary)] flex items-center justify-center">
-            <svg class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l9 6 9-6M3 8v10a2 2 0 002 2h14a2 2 0 002-2V8M3 8l2-2h14l2 2"/></svg>
+        <div>
+          <div class="text-center mb-5">
+            <div class="w-12 h-12 mx-auto mb-3 rounded-full bg-[var(--primary)] flex items-center justify-center">
+              <svg class="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l9 6 9-6M3 8v10a2 2 0 002 2h14a2 2 0 002-2V8M3 8l2-2h14l2 2"/></svg>
+            </div>
+            <h2 class="display text-xl mb-1">Enter the code</h2>
+            <p class="text-sm text-[var(--text-muted)] mb-1">6-digit code sent to</p>
+            <p class="font-semibold">${email}</p>
           </div>
-          <h2 class="display text-xl mb-2">Check your email</h2>
-          <p class="text-sm text-[var(--text-muted)] mb-1">Sign-in link sent to</p>
-          <p class="font-semibold mb-4">${email}</p>
-          <p class="text-xs text-[var(--text-muted)]">Click the link in the email to access the dashboard. The link expires in 1 hour.</p>
-          <p class="text-xs text-[var(--text-muted)] mt-4"><a href="#" id="reset-link" class="underline">Use a different email</a></p>
+          <form id="otp-form" class="space-y-3">
+            <input
+              required name="otp" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+              placeholder="123456" autocomplete="one-time-code"
+              class="input w-full px-4 py-3 rounded-lg text-center text-2xl tracking-widest"
+              autofocus
+            >
+            <button id="verify-btn" type="submit" class="btn-primary w-full py-3 rounded-lg font-semibold">Sign in</button>
+            <div id="otp-error" class="hidden text-sm text-red-600"></div>
+          </form>
+          <p class="text-xs text-center text-[var(--text-muted)] mt-4"><a href="#" id="reset-link" class="underline">Use a different email</a></p>
         </div>
       `
       document.getElementById('reset-link').addEventListener('click', (e) => {
         e.preventDefault()
         showAuthEmailForm()
+      })
+      document.getElementById('otp-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const btn = document.getElementById('verify-btn')
+        const err = document.getElementById('otp-error')
+        btn.disabled = true; btn.textContent = 'Verifying…'
+        err.classList.add('hidden')
+        const fd = new FormData(e.target)
+        const token = fd.get('otp').toString().trim()
+        const { error } = await sb.auth.verifyOtp({ email, token, type: 'email' })
+        if (error) {
+          err.textContent = error.message
+          err.classList.remove('hidden')
+          btn.disabled = false; btn.textContent = 'Sign in'
+        }
+        // Success: onAuthStateChange handles redirecting to dashboard
       })
     }
 
