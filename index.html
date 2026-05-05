@@ -60,7 +60,7 @@
   </div>
 
   <script type="module">
-    import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+    import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.7'
 
     const SUPABASE_URL = 'https://bdzasnbzyfkqojqqucil.supabase.co'
     const SUPABASE_KEY = 'sb_publishable_XOH_-PTfkNsPhwY5eMV_Tg_M9GPbWE5'
@@ -125,18 +125,27 @@
     }
     function clearIntent() { localStorage.removeItem(STORAGE_KEY) }
 
+    // Raw-fetch helper that bypasses the Supabase JS client (which can hang on auth init)
+    async function rawFetch(path) {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+        headers: { apikey: SUPABASE_KEY, Accept: 'application/json' }
+      })
+      if (!r.ok) throw new Error(`Fetch ${path} failed: ${r.status}`)
+      return r.json()
+    }
+
     async function loadInitialData() {
       const [services, packages, contents, rules] = await Promise.all([
-        sb.from('services').select('*').eq('active', true).order('price_pence'),
-        sb.from('packages').select('*').eq('active', true).order('price_pence'),
-        sb.from('package_contents').select('*'),
-        sb.from('availability_rules').select('*')
+        rawFetch('services?select=*&active=eq.true&order=price_pence'),
+        rawFetch('packages?select=*&active=eq.true&order=price_pence'),
+        rawFetch('package_contents?select=*'),
+        rawFetch('availability_rules?select=*'),
       ])
-      state.services = services.data || []
-      state.packages = packages.data || []
-      state.availabilityRules = rules.data || []
+      state.services = services || []
+      state.packages = packages || []
+      state.availabilityRules = rules || []
       state.packageContents = {}
-      for (const pc of (contents.data || [])) {
+      for (const pc of (contents || [])) {
         if (!state.packageContents[pc.package_id]) state.packageContents[pc.package_id] = []
         state.packageContents[pc.package_id].push(pc)
       }
@@ -145,9 +154,10 @@
     async function loadBookedSlots() {
       const start = new Date(); start.setHours(0,0,0,0)
       const end = new Date(start); end.setDate(end.getDate() + 60)
-      const { data } = await sb.from('booked_slots').select('*')
-        .gte('starts_at', start.toISOString()).lt('starts_at', end.toISOString())
-      state.bookedSlots = data || []
+      const path = `booked_slots?select=*&starts_at=gte.${encodeURIComponent(start.toISOString())}&starts_at=lt.${encodeURIComponent(end.toISOString())}`
+      try {
+        state.bookedSlots = await rawFetch(path) || []
+      } catch { state.bookedSlots = [] }
     }
 
     async function loadCustomer() {
@@ -871,11 +881,17 @@
       try {
         await loadInitialData()
         await loadBookedSlots()
-        // Check if user is already signed in
-        const { data: { session } } = await sb.auth.getSession()
+        // Check if user is already signed in (with 2s timeout — auth client can hang on bad state)
+        const session = await Promise.race([
+          sb.auth.getSession().then(r => r.data?.session).catch(() => null),
+          new Promise(resolve => setTimeout(() => resolve(null), 2000))
+        ])
         if (session?.user) {
           state.authUser = session.user
-          await loadCustomer()
+          try { await Promise.race([
+            loadCustomer(),
+            new Promise(resolve => setTimeout(resolve, 2000))
+          ]) } catch {}
         }
         updateAuthStatus()
         // Check for Stripe return
