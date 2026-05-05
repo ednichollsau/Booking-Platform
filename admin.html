@@ -87,7 +87,7 @@
     const SUPABASE_KEY = 'sb_publishable_XOH_-PTfkNsPhwY5eMV_Tg_M9GPbWE5'
     const ADMIN_EMAIL = 'acu@ednicholls.com'
     const sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
-      auth: { detectSessionInUrl: true, flowType: 'pkce', persistSession: true }
+      auth: { detectSessionInUrl: true, flowType: 'implicit', persistSession: true }
     })
 
     const authScreen = document.getElementById('auth-screen')
