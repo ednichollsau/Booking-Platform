@@ -154,11 +154,16 @@
       if (!state.authUser) return
       const { data } = await sb.from('customers').select('*').eq('auth_user_id', state.authUser.id).maybeSingle()
       state.customer = data || null
+      state.customerBalances = []
       if (state.customer) {
-        // Check for active package(s)
         const { data: cps } = await sb.from('customer_packages')
           .select('*').eq('customer_id', state.customer.id).eq('status', 'active').order('purchased_at', { ascending: false })
         state.customerPackage = cps?.[0] || null
+        if (state.customerPackage) {
+          const { data: bals } = await sb.from('customer_package_balances')
+            .select('*').eq('customer_package_id', state.customerPackage.id)
+          state.customerBalances = bals || []
+        }
       }
     }
 
@@ -225,7 +230,12 @@
           updateAuthStatus()
         })
       } else {
-        authStatusEl.innerHTML = ''
+        authStatusEl.innerHTML = `<a href="#" id="signin-link" class="underline hover:text-[var(--text)]">Have a package? Sign in</a>`
+        document.getElementById('signin-link')?.addEventListener('click', (e) => {
+          e.preventDefault()
+          state.flow = 'returning'
+          setView('auth-request')
+        })
       }
     }
 
@@ -237,6 +247,7 @@
         case 'pick-package-service': return renderPickPackageService()
         case 'date-select': return renderDateSelect()
         case 'slot-select': return renderSlotSelect()
+        case 'booking-form': return renderBookingForm()
         case 'auth-request': return renderAuthRequest()
         case 'auth-check-email': return renderCheckEmail()
         case 'onboarding': return renderOnboarding()
@@ -247,12 +258,31 @@
     }
 
     function renderHome() {
+      const hasActivePackage = state.customerPackage && state.customerBalances?.some(b => b.sessions_remaining > 0)
+      const packageBanner = hasActivePackage ? (() => {
+        const p = state.packages.find(x => x.id === state.customerPackage.package_id)
+        const balanceLines = state.customerBalances
+          .filter(b => b.sessions_remaining > 0)
+          .map(b => {
+            const s = state.services.find(x => x.id === b.service_id)
+            return `${b.sessions_remaining} × ${s?.name || ''}`
+          }).join(' · ')
+        return `
+          <div class="card rounded-xl p-5 mb-10 border-l-4" style="border-left-color: var(--accent)">
+            <div class="text-xs font-semibold text-[var(--accent)] uppercase tracking-widest mb-1">Your active package</div>
+            <div class="font-semibold mb-1">${p?.name || ''}</div>
+            <div class="text-sm text-[var(--text-muted)]">${balanceLines}</div>
+            <div class="text-xs text-[var(--text-muted)] mt-2">Click a session below to book using your package.</div>
+          </div>
+        `
+      })() : ''
       viewEl.innerHTML = `
         <div class="view">
           <div class="text-center mb-12">
             <h1 class="display text-4xl md:text-5xl mb-3">Book a session</h1>
             <p class="text-[var(--text-muted)] text-lg">Choose a single session or save with a package.</p>
           </div>
+          ${packageBanner}
           <div class="mb-12">
             <h2 class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-4">Single Session</h2>
             <div class="grid md:grid-cols-2 gap-4">
@@ -302,7 +332,15 @@
         btn.addEventListener('click', () => {
           state.selectedService = state.services.find(s => s.id === btn.dataset.service)
           state.selectedPackage = null
-          state.flow = 'single'
+          // If the signed-in user has package sessions remaining for this service, use the package
+          const bal = state.customerBalances?.find(b => b.service_id === state.selectedService.id && b.sessions_remaining > 0)
+          if (bal && state.customerPackage) {
+            state.selectedPackage = state.packages.find(p => p.id === state.customerPackage.package_id)
+            state.flow = 'package'
+          } else {
+            state.customerPackage = null
+            state.flow = 'single'
+          }
           setView('date-select')
         })
       })
@@ -510,7 +548,10 @@
         if (btn.disabled) return
         btn.addEventListener('click', () => {
           state.selectedSlot = slots[parseInt(btn.dataset.idx)]
-          if (!state.authUser) {
+          // Single-session: simple form, no auth required
+          if (state.flow === 'single') {
+            setView('booking-form')
+          } else if (!state.authUser) {
             persistIntent()
             setView('auth-request')
           } else if (!state.customer) {
@@ -659,6 +700,102 @@
       })
     }
 
+    function renderBookingForm() {
+      const s = state.selectedService
+      const slot = state.selectedSlot
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto">
+          <h1 class="display text-3xl mb-2">Confirm your booking</h1>
+          <p class="text-[var(--text-muted)] mb-6">A few details so I have your contact info and can prepare for our session.</p>
+
+          <div class="card rounded-xl p-4 mb-6">
+            <div class="font-semibold mb-1">${s.name}</div>
+            <div class="text-sm text-[var(--text-muted)]">${fmt.dateLong(slot.start)} at ${fmt.time(slot.start)}</div>
+            <div class="text-sm text-[var(--text-muted)] mt-1">${fmt.money(s.price_pence)} · pay at clinic</div>
+          </div>
+
+          <form id="booking-form" class="space-y-4">
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-semibold mb-1">First name</label>
+                <input required name="first_name" class="input w-full px-4 py-3 rounded-lg" type="text">
+              </div>
+              <div>
+                <label class="block text-sm font-semibold mb-1">Last name</label>
+                <input required name="last_name" class="input w-full px-4 py-3 rounded-lg" type="text">
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm font-semibold mb-1">Email</label>
+              <input required name="email" class="input w-full px-4 py-3 rounded-lg" type="email">
+            </div>
+            <div>
+              <label class="block text-sm font-semibold mb-1">Phone</label>
+              <input required name="phone" class="input w-full px-4 py-3 rounded-lg" type="tel">
+            </div>
+
+            <div class="pt-2 border-t border-[var(--border)]">
+              <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3 mt-3">Brief intake</div>
+              <div class="space-y-3">
+                <div>
+                  <label class="block text-sm font-semibold mb-1">What brings you in?</label>
+                  <textarea required name="reason" rows="3" class="input w-full px-4 py-3 rounded-lg"></textarea>
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-1">Any current medications?</label>
+                  <textarea name="medications" rows="2" class="input w-full px-4 py-3 rounded-lg"></textarea>
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-1">Any current health conditions?</label>
+                  <textarea name="conditions" rows="2" class="input w-full px-4 py-3 rounded-lg"></textarea>
+                </div>
+              </div>
+            </div>
+
+            <label class="flex items-start gap-2 text-sm text-[var(--text-muted)] pt-2">
+              <input required type="checkbox" name="consent" class="mt-1">
+              <span>I have read and agree to the <a href="https://www.ednicholls.com/privacy-policy" target="_blank" class="underline hover:text-[var(--text)]">privacy policy</a>, and consent to my health information being processed for the purpose of providing my acupuncture treatment.</span>
+            </label>
+
+            <button id="confirm-btn" type="submit" class="btn-primary w-full py-4 rounded-lg font-semibold">Confirm booking</button>
+          </form>
+        </div>
+      `
+      document.getElementById('booking-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const btn = document.getElementById('confirm-btn')
+        btn.disabled = true; btn.textContent = 'Booking...'
+        const fd = new FormData(e.target)
+        const reason = fd.get('reason')
+        const medications = fd.get('medications')
+        const conditions = fd.get('conditions')
+
+        const { data: bookingId, error } = await sb.rpc('create_anonymous_booking', {
+          p_email: fd.get('email'),
+          p_first_name: fd.get('first_name'),
+          p_last_name: fd.get('last_name'),
+          p_phone: fd.get('phone'),
+          p_service_id: state.selectedService.id,
+          p_starts_at: state.selectedSlot.start.toISOString(),
+          p_ends_at: state.selectedSlot.end.toISOString(),
+          p_intake_response: { reason, medications, conditions }
+        })
+        if (error) {
+          alert('Error: ' + error.message)
+          btn.disabled = false; btn.textContent = 'Confirm booking'
+          return
+        }
+        // Stash a minimal customer object for the success view (not from DB — we're anon)
+        state.customer = {
+          email: fd.get('email'),
+          first_name: fd.get('first_name'),
+          last_name: fd.get('last_name')
+        }
+        await loadBookedSlots()
+        setView('success', false)
+      })
+    }
+
     function renderSuccess() {
       viewEl.innerHTML = `
         <div class="view max-w-md mx-auto text-center">
@@ -695,29 +832,28 @@
         if (session?.user) {
           state.authUser = session.user
           updateAuthStatus()
+          // Link any pre-existing anonymous customer record to this auth user
+          try { await sb.rpc('link_customer_to_auth') } catch {}
           await loadCustomer()
           // If returning from magic link with stored intent, restore and continue
           const restored = restoreIntent()
-          if (restored && state.view !== 'home') {
-            // Resume the flow at the right point
+          if (restored) {
             if (!state.customer) {
               setView('onboarding', false)
             } else if (state.flow === 'package' && !state.customerPackage) {
               setView('package-detail', false)
-              // user can click buy-btn again to confirm
             } else if (state.selectedSlot) {
               setView('intake', false)
             } else if (state.selectedService) {
               setView('date-select', false)
+            } else {
+              setView('home', false)
             }
             history.length = 0
-          } else if (restored) {
-            // Just landed back on home from auth - jump to next step
-            if (!state.customer) setView('onboarding', false)
-            else if (state.selectedSlot) setView('intake', false)
-            else if (state.selectedService) setView('date-select', false)
-            else if (state.flow === 'package') setView('package-detail', false)
+          } else if (['auth-request','auth-check-email'].includes(state.view)) {
+            // Returning customer signed in without a pending booking — show home with their package
             history.length = 0
+            setView('home', false)
           }
         }
       }
@@ -739,9 +875,9 @@
         const { data: { session } } = await sb.auth.getSession()
         if (session?.user) {
           state.authUser = session.user
-          updateAuthStatus()
           await loadCustomer()
         }
+        updateAuthStatus()
         // Check for Stripe return
         const params = new URLSearchParams(window.location.search)
         if (params.get('stripe_success') === '1') {
