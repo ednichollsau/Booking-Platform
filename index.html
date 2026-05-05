@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ed Nicholls Acupuncture — Booking</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #FAF8F4; --surface: #FFFFFF; --text: #2A2722; --text-muted: #6B6660;
+      --primary: #5C7A6E; --primary-dark: #455D54; --accent: #C8956D; --border: #E8E3DA;
+    }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }
+    .display { font-family: 'Fraunces', serif; font-weight: 500; letter-spacing: -0.02em; }
+    .view { animation: fadeIn 0.25s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .btn-primary { background: var(--primary); color: white; transition: all 0.15s ease; }
+    .btn-primary:hover { background: var(--primary-dark); transform: translateY(-1px); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .btn-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); transition: all 0.15s ease; }
+    .btn-secondary:hover { border-color: var(--primary); }
+    .card { background: var(--surface); border: 1px solid var(--border); transition: all 0.15s ease; }
+    .card-hover:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.04); }
+    .date-pill { transition: all 0.15s ease; background: var(--surface); border: 1px solid var(--border); cursor: pointer; }
+    .date-pill:hover:not(.disabled) { border-color: var(--primary); }
+    .date-pill.disabled { opacity: 0.3; cursor: not-allowed; }
+    .slot { transition: all 0.15s ease; background: var(--surface); border: 1px solid var(--border); cursor: pointer; }
+    .slot:hover:not(:disabled) { border-color: var(--primary); background: rgba(92,122,110,0.04); }
+    .slot:disabled { opacity: 0.4; cursor: not-allowed; }
+    .input { background: var(--surface); border: 1px solid var(--border); transition: all 0.15s ease; font-family: inherit; font-size: 1rem; }
+    .input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(92,122,110,0.1); }
+    .badge { background: rgba(200,149,109,0.12); color: var(--accent); }
+    @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+    .skeleton { background: linear-gradient(90deg, #f0ece5 25%, #f8f5ee 50%, #f0ece5 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <div id="app" class="min-h-screen">
+    <header class="border-b border-[var(--border)] bg-white sticky top-0 z-10">
+      <div class="max-w-5xl mx-auto px-6 py-5 flex items-center justify-between">
+        <div>
+          <div class="display text-xl">Ed Nicholls Acupuncture</div>
+          <div class="text-xs text-[var(--text-muted)]">London</div>
+        </div>
+        <div class="flex items-center gap-4">
+          <button id="back-btn" class="hidden text-sm text-[var(--text-muted)] hover:text-[var(--text)]">← Back</button>
+          <div id="auth-status" class="text-xs text-[var(--text-muted)]"></div>
+        </div>
+      </div>
+    </header>
+    <main class="max-w-5xl mx-auto px-6 py-12">
+      <div id="view"></div>
+    </main>
+    <footer class="max-w-5xl mx-auto px-6 py-8 text-center text-xs text-[var(--text-muted)]">
+      Your data is encrypted and stored in compliance with UK GDPR. <a href="https://www.ednicholls.com/privacy-policy" class="underline hover:text-[var(--text)]">Privacy policy</a>
+    </footer>
+  </div>
+
+  <script type="module">
+    import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
+    const SUPABASE_URL = 'https://bdzasnbzyfkqojqqucil.supabase.co'
+    const SUPABASE_KEY = 'sb_publishable_XOH_-PTfkNsPhwY5eMV_Tg_M9GPbWE5'
+    const sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
+      auth: { detectSessionInUrl: true, flowType: 'pkce', persistSession: true }
+    })
+
+    const STORAGE_KEY = 'ed_booking_intent_v1'
+
+    const state = {
+      view: 'home',
+      services: [], packages: [], packageContents: {},
+      selectedService: null, selectedPackage: null,
+      selectedDate: null, selectedSlot: null,
+      flow: null, customer: null, customerPackage: null,
+      bookedSlots: [], availabilityRules: [],
+      authUser: null, authPending: false
+    }
+
+    const viewEl = document.getElementById('view')
+    const backBtn = document.getElementById('back-btn')
+    const authStatusEl = document.getElementById('auth-status')
+    const history = []
+
+    function setView(name, push = true) {
+      if (push && state.view !== name) history.push(state.view)
+      state.view = name
+      backBtn.classList.toggle('hidden', history.length === 0 || ['success','auth-callback'].includes(name))
+      render()
+    }
+    backBtn.addEventListener('click', () => {
+      if (history.length === 0) return
+      state.view = history.pop()
+      backBtn.classList.toggle('hidden', history.length === 0)
+      render()
+    })
+
+    function persistIntent() {
+      const intent = {
+        flow: state.flow,
+        selectedServiceId: state.selectedService?.id || null,
+        selectedPackageId: state.selectedPackage?.id || null,
+        selectedSlotStart: state.selectedSlot?.start?.toISOString() || null,
+        selectedSlotEnd: state.selectedSlot?.end?.toISOString() || null
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(intent))
+    }
+    function restoreIntent() {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (!raw) return false
+      try {
+        const i = JSON.parse(raw)
+        state.flow = i.flow
+        state.selectedService = state.services.find(s => s.id === i.selectedServiceId) || null
+        state.selectedPackage = state.packages.find(p => p.id === i.selectedPackageId) || null
+        if (i.selectedSlotStart && i.selectedSlotEnd) {
+          state.selectedSlot = { start: new Date(i.selectedSlotStart), end: new Date(i.selectedSlotEnd), booked: false }
+        }
+        return true
+      } catch { return false }
+    }
+    function clearIntent() { localStorage.removeItem(STORAGE_KEY) }
+
+    async function loadInitialData() {
+      const [services, packages, contents, rules] = await Promise.all([
+        sb.from('services').select('*').eq('active', true).order('price_pence'),
+        sb.from('packages').select('*').eq('active', true).order('price_pence'),
+        sb.from('package_contents').select('*'),
+        sb.from('availability_rules').select('*')
+      ])
+      state.services = services.data || []
+      state.packages = packages.data || []
+      state.availabilityRules = rules.data || []
+      state.packageContents = {}
+      for (const pc of (contents.data || [])) {
+        if (!state.packageContents[pc.package_id]) state.packageContents[pc.package_id] = []
+        state.packageContents[pc.package_id].push(pc)
+      }
+    }
+
+    async function loadBookedSlots() {
+      const start = new Date(); start.setHours(0,0,0,0)
+      const end = new Date(start); end.setDate(end.getDate() + 60)
+      const { data } = await sb.from('booked_slots').select('*')
+        .gte('starts_at', start.toISOString()).lt('starts_at', end.toISOString())
+      state.bookedSlots = data || []
+    }
+
+    async function loadCustomer() {
+      if (!state.authUser) return
+      const { data } = await sb.from('customers').select('*').eq('auth_user_id', state.authUser.id).maybeSingle()
+      state.customer = data || null
+      if (state.customer) {
+        // Check for active package(s)
+        const { data: cps } = await sb.from('customer_packages')
+          .select('*').eq('customer_id', state.customer.id).eq('status', 'active').order('purchased_at', { ascending: false })
+        state.customerPackage = cps?.[0] || null
+      }
+    }
+
+    sb.channel('bookings-changes')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'bookings' }, () => {
+        loadBookedSlots().then(() => {
+          if (['date-select','slot-select'].includes(state.view)) render()
+        })
+      })
+      .subscribe()
+
+    const fmt = {
+      money: p => '£' + (p/100).toFixed(0),
+      time: d => d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+      dateLong: d => d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
+    }
+
+    function generateSlots(date) {
+      const dow = date.getDay()
+      const rule = state.availabilityRules.find(r => r.day_of_week === dow)
+      if (!rule) return []
+      const [sH,sM] = rule.start_time.split(':').map(Number)
+      const [eH,eM] = rule.end_time.split(':').map(Number)
+      const slots = []
+      let cur = new Date(date); cur.setHours(sH, sM, 0, 0)
+      const endT = new Date(date); endT.setHours(eH, eM, 0, 0)
+      const now = new Date()
+      while (cur < endT) {
+        const slotEnd = new Date(cur.getTime() + 60*60*1000)
+        if (slotEnd > endT) break
+        if (cur < now) { cur = slotEnd; continue }
+        const isBooked = state.bookedSlots.some(b => {
+          const bs = new Date(b.starts_at), be = new Date(b.ends_at)
+          return cur < be && slotEnd > bs
+        })
+        slots.push({ start: new Date(cur), end: slotEnd, booked: isBooked })
+        cur = slotEnd
+      }
+      return slots
+    }
+
+    function getNext30Days() {
+      const days = []
+      const start = new Date(); start.setHours(0,0,0,0)
+      for (let i = 0; i < 30; i++) {
+        const d = new Date(start); d.setDate(d.getDate() + i)
+        const slots = generateSlots(d)
+        days.push({ date: d, hasAvailability: slots.some(s => !s.booked) })
+      }
+      return days
+    }
+
+    function updateAuthStatus() {
+      if (state.authUser) {
+        authStatusEl.innerHTML = `${state.authUser.email} · <a href="#" id="signout-link" class="underline hover:text-[var(--text)]">Sign out</a>`
+        document.getElementById('signout-link')?.addEventListener('click', async (e) => {
+          e.preventDefault()
+          await sb.auth.signOut()
+          state.authUser = null
+          state.customer = null
+          state.customerPackage = null
+          history.length = 0
+          setView('home', false)
+          updateAuthStatus()
+        })
+      } else {
+        authStatusEl.innerHTML = ''
+      }
+    }
+
+    function render() {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      switch (state.view) {
+        case 'home': return renderHome()
+        case 'package-detail': return renderPackageDetail()
+        case 'pick-package-service': return renderPickPackageService()
+        case 'date-select': return renderDateSelect()
+        case 'slot-select': return renderSlotSelect()
+        case 'auth-request': return renderAuthRequest()
+        case 'auth-check-email': return renderCheckEmail()
+        case 'onboarding': return renderOnboarding()
+        case 'intake': return renderIntake()
+        case 'success': return renderSuccess()
+        default: return renderHome()
+      }
+    }
+
+    function renderHome() {
+      viewEl.innerHTML = `
+        <div class="view">
+          <div class="text-center mb-12">
+            <h1 class="display text-4xl md:text-5xl mb-3">Book a session</h1>
+            <p class="text-[var(--text-muted)] text-lg">Choose a single session or save with a package.</p>
+          </div>
+          <div class="mb-12">
+            <h2 class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-4">Single Session</h2>
+            <div class="grid md:grid-cols-2 gap-4">
+              ${state.services.map(s => `
+                <button data-service="${s.id}" class="card card-hover service-btn rounded-xl p-6 text-left">
+                  <div class="flex justify-between items-start mb-2">
+                    <div class="font-semibold text-lg">${s.name}</div>
+                    <div class="display text-2xl">${fmt.money(s.price_pence)}</div>
+                  </div>
+                  <div class="text-sm text-[var(--text-muted)] mb-3">${s.duration_minutes} minutes</div>
+                  <div class="text-sm text-[var(--text-muted)] leading-relaxed">${s.description || ''}</div>
+                </button>
+              `).join('')}
+            </div>
+          </div>
+          <div>
+            <h2 class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-4">Packages</h2>
+            <div class="grid md:grid-cols-3 gap-4">
+              ${state.packages.map(p => {
+                const contents = state.packageContents[p.id] || []
+                const breakdown = contents.map(c => {
+                  const svc = state.services.find(s => s.id === c.service_id)
+                  return `${c.quantity}× ${svc?.name?.replace(' Acupuncture','') || ''}`
+                }).join(' + ')
+                const fullPrice = contents.reduce((sum, c) => {
+                  const svc = state.services.find(s => s.id === c.service_id)
+                  return sum + (svc?.price_pence || 0) * c.quantity
+                }, 0)
+                const savings = fullPrice - p.price_pence
+                return `
+                  <button data-package="${p.id}" class="card card-hover package-btn rounded-xl p-6 text-left">
+                    <div class="font-semibold text-lg mb-1">${p.name.split(' — ')[0]}</div>
+                    <div class="flex items-baseline gap-2 mb-2">
+                      <div class="display text-3xl">${fmt.money(p.price_pence)}</div>
+                      ${savings > 0 ? `<div class="text-xs text-[var(--text-muted)] line-through">${fmt.money(fullPrice)}</div>` : ''}
+                    </div>
+                    <div class="text-sm text-[var(--text-muted)] mb-3">${p.total_sessions} sessions</div>
+                    <div class="text-xs text-[var(--text-muted)]">${breakdown}</div>
+                  </button>
+                `
+              }).join('')}
+            </div>
+          </div>
+        </div>
+      `
+      viewEl.querySelectorAll('.service-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          state.selectedService = state.services.find(s => s.id === btn.dataset.service)
+          state.selectedPackage = null
+          state.flow = 'single'
+          setView('date-select')
+        })
+      })
+      viewEl.querySelectorAll('.package-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          state.selectedPackage = state.packages.find(p => p.id === btn.dataset.package)
+          state.flow = 'package'
+          setView('package-detail')
+        })
+      })
+    }
+
+    function renderPackageDetail() {
+      const p = state.selectedPackage
+      const contents = state.packageContents[p.id] || []
+      const fullPrice = contents.reduce((sum, c) => {
+        const svc = state.services.find(s => s.id === c.service_id)
+        return sum + (svc?.price_pence || 0) * c.quantity
+      }, 0)
+      const savings = fullPrice - p.price_pence
+      viewEl.innerHTML = `
+        <div class="view max-w-2xl mx-auto">
+          <h1 class="display text-4xl mb-2">${p.name}</h1>
+          <p class="text-[var(--text-muted)] mb-8">${p.description || ''}</p>
+          <div class="card rounded-xl p-8 mb-6">
+            <div class="flex items-baseline gap-3 mb-6">
+              <div class="display text-5xl">${fmt.money(p.price_pence)}</div>
+              ${savings > 0 ? `<div class="text-[var(--text-muted)] line-through">${fmt.money(fullPrice)}</div><span class="badge px-2 py-1 rounded text-xs font-semibold">Save ${fmt.money(savings)}</span>` : ''}
+            </div>
+            <div class="space-y-2 mb-6">
+              <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3">Includes</div>
+              ${contents.map(c => {
+                const svc = state.services.find(s => s.id === c.service_id)
+                return `<div class="flex justify-between py-3 border-b border-[var(--border)]"><div><span class="font-semibold">${c.quantity}</span> × ${svc?.name}</div><div class="text-[var(--text-muted)]">${svc?.duration_minutes} min each</div></div>`
+              }).join('')}
+              <div class="flex justify-between pt-3 text-sm text-[var(--text-muted)]"><div>Expires</div><div>12 months from purchase</div></div>
+            </div>
+            <button id="buy-btn" class="btn-primary w-full py-4 rounded-lg font-semibold">Purchase package — ${fmt.money(p.price_pence)}</button>
+            <p class="text-xs text-center text-[var(--text-muted)] mt-3">Payment processing coming soon. For now, package activates immediately on confirmation.</p>
+          </div>
+        </div>
+      `
+      document.getElementById('buy-btn').addEventListener('click', async () => {
+        if (!state.authUser) {
+          persistIntent()
+          setView('auth-request')
+          return
+        }
+        if (!state.customer) { setView('onboarding'); return }
+        await purchasePackageAndContinue()
+      })
+    }
+
+    async function purchasePackageAndContinue() {
+      const p = state.selectedPackage
+      const expiry = new Date(); expiry.setDate(expiry.getDate() + p.expiry_days)
+      const { data: cp, error } = await sb.from('customer_packages').insert({
+        customer_id: state.customer.id,
+        package_id: p.id,
+        expires_at: expiry.toISOString(),
+        amount_paid_pence: p.price_pence,
+        status: 'active'
+      }).select().single()
+      if (error) { alert('Error: ' + error.message); return }
+      state.customerPackage = cp
+      const contents = state.packageContents[p.id] || []
+      const balances = contents.map(c => ({
+        customer_package_id: cp.id,
+        service_id: c.service_id,
+        sessions_remaining: c.quantity
+      }))
+      await sb.from('customer_package_balances').insert(balances)
+      if (contents.length === 1) {
+        state.selectedService = state.services.find(s => s.id === contents[0].service_id)
+        setView('date-select')
+      } else {
+        setView('pick-package-service')
+      }
+    }
+
+    function renderPickPackageService() {
+      const contents = state.packageContents[state.selectedPackage.id] || []
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto">
+          <h1 class="display text-3xl mb-2">Which session first?</h1>
+          <p class="text-[var(--text-muted)] mb-8">Your package is purchased. Pick which session type to book first.</p>
+          <div class="space-y-3">
+            ${contents.map(c => {
+              const svc = state.services.find(s => s.id === c.service_id)
+              return `<button data-service="${svc.id}" class="card card-hover service-pick rounded-xl p-5 text-left w-full">
+                <div class="flex justify-between items-center">
+                  <div><div class="font-semibold text-lg">${svc.name}</div><div class="text-sm text-[var(--text-muted)]">${svc.duration_minutes} minutes</div></div>
+                  <div class="text-sm text-[var(--text-muted)]">${c.quantity} remaining</div>
+                </div>
+              </button>`
+            }).join('')}
+          </div>
+        </div>
+      `
+      viewEl.querySelectorAll('.service-pick').forEach(btn => {
+        btn.addEventListener('click', () => {
+          state.selectedService = state.services.find(s => s.id === btn.dataset.service)
+          setView('date-select')
+        })
+      })
+    }
+
+    function renderDateSelect() {
+      const days = getNext30Days()
+      viewEl.innerHTML = `
+        <div class="view">
+          <h1 class="display text-3xl md:text-4xl mb-2">${state.selectedService.name}</h1>
+          <p class="text-[var(--text-muted)] mb-8">Choose a date.</p>
+          <div class="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-7 gap-2 mb-8">
+            ${days.map((d, i) => `
+              <button data-idx="${i}" class="date-pill rounded-lg p-3 text-center ${!d.hasAvailability ? 'disabled' : ''}" ${!d.hasAvailability ? 'disabled' : ''}>
+                <div class="text-xs uppercase tracking-wide opacity-70">${d.date.toLocaleDateString('en-GB', { weekday: 'short' })}</div>
+                <div class="display text-xl my-1">${d.date.getDate()}</div>
+                <div class="text-xs opacity-70">${d.date.toLocaleDateString('en-GB', { month: 'short' })}</div>
+              </button>
+            `).join('')}
+          </div>
+        </div>
+      `
+      viewEl.querySelectorAll('.date-pill').forEach(pill => {
+        if (pill.disabled) return
+        pill.addEventListener('click', () => {
+          state.selectedDate = days[parseInt(pill.dataset.idx)].date
+          setView('slot-select')
+        })
+      })
+    }
+
+    function renderSlotSelect() {
+      const slots = generateSlots(state.selectedDate)
+      viewEl.innerHTML = `
+        <div class="view max-w-2xl mx-auto">
+          <h1 class="display text-3xl mb-2">${fmt.dateLong(state.selectedDate)}</h1>
+          <p class="text-[var(--text-muted)] mb-8">Choose a time.</p>
+          <div class="grid grid-cols-3 sm:grid-cols-4 gap-2">
+            ${slots.length === 0 ? '<p class="text-[var(--text-muted)] col-span-full">No availability on this day.</p>' : ''}
+            ${slots.map((s, i) => `<button data-idx="${i}" class="slot rounded-lg p-3 text-center" ${s.booked ? 'disabled' : ''}><div class="font-semibold">${fmt.time(s.start)}</div>${s.booked ? '<div class="text-xs">Booked</div>' : ''}</button>`).join('')}
+          </div>
+        </div>
+      `
+      viewEl.querySelectorAll('.slot').forEach(btn => {
+        if (btn.disabled) return
+        btn.addEventListener('click', () => {
+          state.selectedSlot = slots[parseInt(btn.dataset.idx)]
+          if (!state.authUser) {
+            persistIntent()
+            setView('auth-request')
+          } else if (!state.customer) {
+            setView('onboarding')
+          } else {
+            setView('intake')
+          }
+        })
+      })
+    }
+
+    function renderAuthRequest() {
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto">
+          <h1 class="display text-3xl mb-2">Sign in to confirm</h1>
+          <p class="text-[var(--text-muted)] mb-6">Enter your email and we'll send you a secure sign-in link. No password required.</p>
+          <form id="email-form" class="space-y-4">
+            <input required name="email" type="email" placeholder="you@example.com" class="input w-full px-4 py-3 rounded-lg" autofocus>
+            <label class="flex items-start gap-2 text-sm text-[var(--text-muted)]">
+              <input required type="checkbox" class="mt-1">
+              <span>I have read and agree to the <a href="https://www.ednicholls.com/privacy-policy" class="underline hover:text-[var(--text)]" target="_blank">privacy policy</a>, and consent to my health information being processed for the purpose of providing my acupuncture treatment.</span>
+            </label>
+            <button id="send-btn" type="submit" class="btn-primary w-full py-4 rounded-lg font-semibold">Send sign-in link</button>
+          </form>
+        </div>
+      `
+      document.getElementById('email-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const btn = document.getElementById('send-btn')
+        btn.disabled = true; btn.textContent = 'Sending...'
+        const email = e.target.email.value
+        const { error } = await sb.auth.signInWithOtp({
+          email,
+          options: { emailRedirectTo: window.location.origin + window.location.pathname }
+        })
+        if (error) { alert('Error: ' + error.message); btn.disabled = false; btn.textContent = 'Send sign-in link'; return }
+        sessionStorage.setItem('pending_email', email)
+        setView('auth-check-email', false)
+      })
+    }
+
+    function renderCheckEmail() {
+      const email = sessionStorage.getItem('pending_email') || 'your email'
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto text-center">
+          <div class="w-16 h-16 mx-auto mb-6 rounded-full bg-[var(--primary)] flex items-center justify-center">
+            <svg class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l9 6 9-6M3 8v10a2 2 0 002 2h14a2 2 0 002-2V8M3 8l2-2h14l2 2"/></svg>
+          </div>
+          <h1 class="display text-3xl mb-3">Check your email</h1>
+          <p class="text-[var(--text-muted)] mb-2">We've sent a sign-in link to</p>
+          <p class="font-semibold mb-6">${email}</p>
+          <p class="text-sm text-[var(--text-muted)]">Click the link in the email to return here and finish booking. The link expires in 1 hour.</p>
+          <p class="text-xs text-[var(--text-muted)] mt-8">Wrong email? <a href="#" id="reset" class="underline">Try again</a></p>
+        </div>
+      `
+      document.getElementById('reset').addEventListener('click', (e) => {
+        e.preventDefault()
+        sessionStorage.removeItem('pending_email')
+        setView('auth-request', false)
+      })
+    }
+
+    function renderOnboarding() {
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto">
+          <h1 class="display text-3xl mb-2">Welcome</h1>
+          <p class="text-[var(--text-muted)] mb-8">A few details so I have your contact info.</p>
+          <form id="onboard-form" class="space-y-4">
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="block text-sm font-semibold mb-1">First name</label><input required name="first_name" class="input w-full px-4 py-3 rounded-lg" type="text"></div>
+              <div><label class="block text-sm font-semibold mb-1">Last name</label><input required name="last_name" class="input w-full px-4 py-3 rounded-lg" type="text"></div>
+            </div>
+            <div><label class="block text-sm font-semibold mb-1">Phone</label><input required name="phone" class="input w-full px-4 py-3 rounded-lg" type="tel"></div>
+            <button id="onboard-btn" type="submit" class="btn-primary w-full py-4 rounded-lg font-semibold">Continue</button>
+          </form>
+        </div>
+      `
+      document.getElementById('onboard-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const btn = document.getElementById('onboard-btn')
+        btn.disabled = true; btn.textContent = 'Saving...'
+        const fd = new FormData(e.target)
+        const data = Object.fromEntries(fd)
+        const { data: created, error } = await sb.from('customers').insert({
+          ...data, email: state.authUser.email, auth_user_id: state.authUser.id
+        }).select().single()
+        if (error) { alert('Error: ' + error.message); btn.disabled = false; btn.textContent = 'Continue'; return }
+        state.customer = created
+        // Continue based on flow
+        if (state.flow === 'package' && !state.customerPackage) {
+          await purchasePackageAndContinue()
+        } else if (state.selectedSlot) {
+          setView('intake')
+        } else {
+          setView('home', false)
+        }
+      })
+    }
+
+    function renderIntake() {
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto">
+          <h1 class="display text-3xl mb-2">Brief intake</h1>
+          <p class="text-[var(--text-muted)] mb-8">A few quick questions before your session.</p>
+          <div class="card rounded-xl p-4 mb-6">
+            <div class="font-semibold mb-1">${state.selectedService.name}</div>
+            <div class="text-sm text-[var(--text-muted)]">${fmt.dateLong(state.selectedSlot.start)} at ${fmt.time(state.selectedSlot.start)}</div>
+            ${state.customerPackage ? `<div class="text-xs text-[var(--accent)] font-semibold mt-2">Using ${state.selectedPackage?.name || 'your package'}</div>` : ''}
+          </div>
+          <form id="intake-form" class="space-y-4">
+            <div><label class="block text-sm font-semibold mb-1">What brings you in?</label><textarea required name="reason" rows="3" class="input w-full px-4 py-3 rounded-lg"></textarea></div>
+            <div><label class="block text-sm font-semibold mb-1">Any current medications?</label><textarea name="medications" rows="2" class="input w-full px-4 py-3 rounded-lg"></textarea></div>
+            <div><label class="block text-sm font-semibold mb-1">Any current health conditions?</label><textarea name="conditions" rows="2" class="input w-full px-4 py-3 rounded-lg"></textarea></div>
+            <button id="confirm-btn" type="submit" class="btn-primary w-full py-4 rounded-lg font-semibold">Confirm booking</button>
+          </form>
+        </div>
+      `
+      document.getElementById('intake-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const btn = document.getElementById('confirm-btn')
+        btn.disabled = true; btn.textContent = 'Booking...'
+        const fd = new FormData(e.target)
+        const intake = Object.fromEntries(fd)
+        const booking = {
+          customer_id: state.customer.id,
+          service_id: state.selectedService.id,
+          customer_package_id: state.customerPackage?.id || null,
+          starts_at: state.selectedSlot.start.toISOString(),
+          ends_at: state.selectedSlot.end.toISOString(),
+          intake_response: intake,
+          status: 'confirmed'
+        }
+        const { error } = await sb.from('bookings').insert(booking)
+        if (error) { alert('Error: ' + error.message); btn.disabled = false; btn.textContent = 'Confirm booking'; return }
+        if (state.customerPackage) {
+          const { data: bal } = await sb.from('customer_package_balances')
+            .select('*').eq('customer_package_id', state.customerPackage.id)
+            .eq('service_id', state.selectedService.id).single()
+          if (bal && bal.sessions_remaining > 0) {
+            await sb.from('customer_package_balances').update({ sessions_remaining: bal.sessions_remaining - 1 }).eq('id', bal.id)
+          }
+        }
+        await loadBookedSlots()
+        clearIntent()
+        setView('success', false)
+      })
+    }
+
+    function renderSuccess() {
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto text-center">
+          <div class="w-16 h-16 mx-auto mb-6 rounded-full bg-[var(--primary)] flex items-center justify-center">
+            <svg class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+          </div>
+          <h1 class="display text-4xl mb-3">You're booked</h1>
+          <p class="text-[var(--text-muted)] mb-8">Confirmation sent to ${state.customer.email}</p>
+          <div class="card rounded-xl p-6 text-left mb-6">
+            <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Your appointment</div>
+            <div class="font-semibold text-lg mb-1">${state.selectedService.name}</div>
+            <div class="text-[var(--text-muted)]">${fmt.dateLong(state.selectedSlot.start)} at ${fmt.time(state.selectedSlot.start)}</div>
+            ${state.customerPackage ? `<div class="text-sm text-[var(--accent)] font-semibold mt-3">1 session used from your package</div>` : ''}
+          </div>
+          <button id="home-btn" class="btn-secondary px-6 py-3 rounded-lg">Book another session</button>
+        </div>
+      `
+      document.getElementById('home-btn').addEventListener('click', () => {
+        state.selectedService = null; state.selectedPackage = null
+        state.selectedDate = null; state.selectedSlot = null
+        state.flow = null
+        // Keep customer/customerPackage - they're persistent
+        history.length = 0
+        setView('home', false)
+      })
+    }
+
+    // ============================================================
+    // AUTH HANDLING
+    // ============================================================
+
+    sb.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+        if (session?.user) {
+          state.authUser = session.user
+          updateAuthStatus()
+          await loadCustomer()
+          // If returning from magic link with stored intent, restore and continue
+          const restored = restoreIntent()
+          if (restored && state.view !== 'home') {
+            // Resume the flow at the right point
+            if (!state.customer) {
+              setView('onboarding', false)
+            } else if (state.flow === 'package' && !state.customerPackage) {
+              setView('package-detail', false)
+              // user can click buy-btn again to confirm
+            } else if (state.selectedSlot) {
+              setView('intake', false)
+            } else if (state.selectedService) {
+              setView('date-select', false)
+            }
+            history.length = 0
+          } else if (restored) {
+            // Just landed back on home from auth - jump to next step
+            if (!state.customer) setView('onboarding', false)
+            else if (state.selectedSlot) setView('intake', false)
+            else if (state.selectedService) setView('date-select', false)
+            else if (state.flow === 'package') setView('package-detail', false)
+            history.length = 0
+          }
+        }
+      }
+      if (event === 'SIGNED_OUT') {
+        state.authUser = null
+        state.customer = null
+        state.customerPackage = null
+        clearIntent()
+        updateAuthStatus()
+      }
+    })
+
+    async function init() {
+      viewEl.innerHTML = `<div class="space-y-6"><div class="skeleton h-12 w-2/3 mx-auto"></div><div class="grid md:grid-cols-2 gap-4"><div class="skeleton h-32"></div><div class="skeleton h-32"></div></div><div class="grid md:grid-cols-3 gap-4"><div class="skeleton h-40"></div><div class="skeleton h-40"></div><div class="skeleton h-40"></div></div></div>`
+      try {
+        await loadInitialData()
+        await loadBookedSlots()
+        // Check if user is already signed in
+        const { data: { session } } = await sb.auth.getSession()
+        if (session?.user) {
+          state.authUser = session.user
+          updateAuthStatus()
+          await loadCustomer()
+        }
+        render()
+      } catch (err) {
+        viewEl.innerHTML = `<div class="text-center text-red-600">Failed to load: ${err.message}</div>`
+      }
+    }
+    init()
+  </script>
+</body>
+</html>
