@@ -66,7 +66,7 @@
     const SUPABASE_KEY = 'sb_publishable_XOH_-PTfkNsPhwY5eMV_Tg_M9GPbWE5'
     const STRIPE_PUBLISHABLE_KEY = 'pk_test_51SY2F7RwdSqO1UREvGhx9E7bGQb0qF29zbqW9QZ6bLlREzHPZ0kcloIfqVVY30aSyBFjXq2XOeMKeJFaq6lstsat006cFJHzxr'
     const sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
-      auth: { detectSessionInUrl: true, flowType: 'pkce', persistSession: true }
+      auth: { detectSessionInUrl: true, flowType: 'implicit', persistSession: true }
     })
 
     const STORAGE_KEY = 'ed_booking_intent_v1'
