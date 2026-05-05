@@ -606,21 +606,50 @@
     function renderCheckEmail() {
       const email = sessionStorage.getItem('pending_email') || 'your email'
       viewEl.innerHTML = `
-        <div class="view max-w-md mx-auto text-center">
-          <div class="w-16 h-16 mx-auto mb-6 rounded-full bg-[var(--primary)] flex items-center justify-center">
-            <svg class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l9 6 9-6M3 8v10a2 2 0 002 2h14a2 2 0 002-2V8M3 8l2-2h14l2 2"/></svg>
+        <div class="view max-w-md mx-auto">
+          <div class="text-center mb-6">
+            <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-[var(--primary)] flex items-center justify-center">
+              <svg class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l9 6 9-6M3 8v10a2 2 0 002 2h14a2 2 0 002-2V8M3 8l2-2h14l2 2"/></svg>
+            </div>
+            <h1 class="display text-3xl mb-2">Enter the code</h1>
+            <p class="text-[var(--text-muted)] text-sm mb-1">We've sent a 6-digit code to</p>
+            <p class="font-semibold">${email}</p>
           </div>
-          <h1 class="display text-3xl mb-3">Check your email</h1>
-          <p class="text-[var(--text-muted)] mb-2">We've sent a sign-in link to</p>
-          <p class="font-semibold mb-6">${email}</p>
-          <p class="text-sm text-[var(--text-muted)]">Click the link in the email to return here and finish booking. The link expires in 1 hour.</p>
-          <p class="text-xs text-[var(--text-muted)] mt-8">Wrong email? <a href="#" id="reset" class="underline">Try again</a></p>
+          <form id="otp-form" class="space-y-4">
+            <input
+              required name="otp" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+              placeholder="123456"
+              autocomplete="one-time-code"
+              class="input w-full px-4 py-4 rounded-lg text-center text-2xl tracking-widest"
+              autofocus
+            >
+            <button id="verify-btn" type="submit" class="btn-primary w-full py-4 rounded-lg font-semibold">Sign in</button>
+            <div id="otp-error" class="hidden text-sm text-center text-red-600"></div>
+          </form>
+          <p class="text-xs text-center text-[var(--text-muted)] mt-6">Didn't get it? Check spam, or <a href="#" id="reset" class="underline">use a different email</a>.</p>
         </div>
       `
       document.getElementById('reset').addEventListener('click', (e) => {
         e.preventDefault()
         sessionStorage.removeItem('pending_email')
         setView('auth-request', false)
+      })
+      document.getElementById('otp-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const btn = document.getElementById('verify-btn')
+        const err = document.getElementById('otp-error')
+        btn.disabled = true; btn.textContent = 'Verifying…'
+        err.classList.add('hidden')
+        const fd = new FormData(e.target)
+        const token = fd.get('otp').toString().trim()
+        const { error } = await sb.auth.verifyOtp({ email, token, type: 'email' })
+        if (error) {
+          err.textContent = error.message
+          err.classList.remove('hidden')
+          btn.disabled = false; btn.textContent = 'Sign in'
+          return
+        }
+        // Success — onAuthStateChange will handle the next view
       })
     }
 
