@@ -78,7 +78,26 @@
       selectedDate: null, selectedSlot: null,
       flow: null, customer: null, customerPackage: null,
       bookedSlots: [], availabilityRules: [],
-      authUser: null, authPending: false
+      authUser: null, accessToken: null, authPending: false,
+      customerBalances: []
+    }
+
+    // Authed fetch helper that bypasses the Supabase JS client
+    async function authedFetch(path, options = {}) {
+      const headers = {
+        apikey: SUPABASE_KEY,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(options.headers || {})
+      }
+      if (state.accessToken) headers.Authorization = `Bearer ${state.accessToken}`
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { ...options, headers })
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '')
+        throw new Error(`${r.status} ${txt}`)
+      }
+      const text = await r.text()
+      return text ? JSON.parse(text) : null
     }
 
     const viewEl = document.getElementById('view')
@@ -162,17 +181,21 @@
 
     async function loadCustomer() {
       if (!state.authUser) return
-      const { data } = await sb.from('customers').select('*').eq('auth_user_id', state.authUser.id).maybeSingle()
-      state.customer = data || null
+      try {
+        const rows = await authedFetch(`customers?select=*&auth_user_id=eq.${state.authUser.id}`)
+        state.customer = (rows && rows[0]) || null
+      } catch { state.customer = null }
       state.customerBalances = []
+      state.customerPackage = null
       if (state.customer) {
-        const { data: cps } = await sb.from('customer_packages')
-          .select('*').eq('customer_id', state.customer.id).eq('status', 'active').order('purchased_at', { ascending: false })
-        state.customerPackage = cps?.[0] || null
+        try {
+          const cps = await authedFetch(`customer_packages?select=*&customer_id=eq.${state.customer.id}&status=eq.active&order=purchased_at.desc`)
+          state.customerPackage = (cps && cps[0]) || null
+        } catch {}
         if (state.customerPackage) {
-          const { data: bals } = await sb.from('customer_package_balances')
-            .select('*').eq('customer_package_id', state.customerPackage.id)
-          state.customerBalances = bals || []
+          try {
+            state.customerBalances = await authedFetch(`customer_package_balances?select=*&customer_package_id=eq.${state.customerPackage.id}`) || []
+          } catch { state.customerBalances = [] }
         }
       }
     }
@@ -406,17 +429,14 @@
 
     async function purchasePackageAndContinue() {
       const p = state.selectedPackage
-      // Save intent so we can restore after Stripe redirect
       persistIntent()
-      // Get a fresh access token for the edge function
-      const { data: { session: authSession } } = await sb.auth.getSession()
-      if (!authSession) { alert('Please sign in again.'); setView('auth-request'); return }
+      if (!state.accessToken) { alert('Please sign in again.'); setView('auth-request'); return }
       try {
         const response = await fetch(`${SUPABASE_URL}/functions/v1/create-checkout-session`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${authSession.access_token}`,
+            'Authorization': `Bearer ${state.accessToken}`,
             'apikey': SUPABASE_KEY,
           },
           body: JSON.stringify({
@@ -427,7 +447,6 @@
         const result = await response.json()
         if (result.error) throw new Error(result.error)
         if (!result.url) throw new Error('No checkout URL returned')
-        // Redirect to Stripe Checkout
         window.location.href = result.url
       } catch (err) {
         alert('Payment setup failed: ' + err.message)
@@ -674,12 +693,22 @@
         btn.disabled = true; btn.textContent = 'Saving...'
         const fd = new FormData(e.target)
         const data = Object.fromEntries(fd)
-        const { data: created, error } = await sb.from('customers').insert({
-          ...data, email: state.authUser.email, auth_user_id: state.authUser.id
-        }).select().single()
-        if (error) { alert('Error: ' + error.message); btn.disabled = false; btn.textContent = 'Continue'; return }
-        state.customer = created
-        // Continue based on flow
+        try {
+          const result = await authedFetch('customers', {
+            method: 'POST',
+            headers: { Prefer: 'return=representation' },
+            body: JSON.stringify({
+              ...data,
+              email: state.authUser.email,
+              auth_user_id: state.authUser.id
+            })
+          })
+          state.customer = Array.isArray(result) ? result[0] : result
+        } catch (err) {
+          alert('Error: ' + err.message)
+          btn.disabled = false; btn.textContent = 'Continue'
+          return
+        }
         if (state.flow === 'package' && !state.customerPackage) {
           await purchasePackageAndContinue()
         } else if (state.selectedSlot) {
@@ -723,15 +752,24 @@
           intake_response: intake,
           status: 'confirmed'
         }
-        const { error } = await sb.from('bookings').insert(booking)
-        if (error) { alert('Error: ' + error.message); btn.disabled = false; btn.textContent = 'Confirm booking'; return }
+        try {
+          await authedFetch('bookings', { method: 'POST', body: JSON.stringify(booking) })
+        } catch (err) {
+          alert('Error: ' + err.message)
+          btn.disabled = false; btn.textContent = 'Confirm booking'
+          return
+        }
         if (state.customerPackage) {
-          const { data: bal } = await sb.from('customer_package_balances')
-            .select('*').eq('customer_package_id', state.customerPackage.id)
-            .eq('service_id', state.selectedService.id).single()
-          if (bal && bal.sessions_remaining > 0) {
-            await sb.from('customer_package_balances').update({ sessions_remaining: bal.sessions_remaining - 1 }).eq('id', bal.id)
-          }
+          try {
+            const bals = await authedFetch(`customer_package_balances?select=*&customer_package_id=eq.${state.customerPackage.id}&service_id=eq.${state.selectedService.id}`)
+            const bal = bals && bals[0]
+            if (bal && bal.sessions_remaining > 0) {
+              await authedFetch(`customer_package_balances?id=eq.${bal.id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ sessions_remaining: bal.sessions_remaining - 1 })
+              })
+            }
+          } catch {}
         }
         await loadBookedSlots()
         clearIntent()
@@ -867,12 +905,23 @@
     // ============================================================
 
     sb.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') {
         if (session?.user) {
           state.authUser = session.user
+          state.accessToken = session.access_token
           updateAuthStatus()
           // Link any pre-existing anonymous customer record to this auth user
-          try { await sb.rpc('link_customer_to_auth') } catch {}
+          try {
+            await fetch(`${SUPABASE_URL}/rest/v1/rpc/link_customer_to_auth`, {
+              method: 'POST',
+              headers: {
+                apikey: SUPABASE_KEY,
+                Authorization: `Bearer ${state.accessToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: '{}'
+            })
+          } catch {}
           await loadCustomer()
           // If returning from magic link with stored intent, restore and continue
           const restored = restoreIntent()
@@ -898,8 +947,10 @@
       }
       if (event === 'SIGNED_OUT') {
         state.authUser = null
+        state.accessToken = null
         state.customer = null
         state.customerPackage = null
+        state.customerBalances = []
         clearIntent()
         updateAuthStatus()
       }
@@ -917,9 +968,10 @@
         ])
         if (session?.user) {
           state.authUser = session.user
+          state.accessToken = session.access_token
           try { await Promise.race([
             loadCustomer(),
-            new Promise(resolve => setTimeout(resolve, 2000))
+            new Promise(resolve => setTimeout(resolve, 3000))
           ]) } catch {}
         }
         updateAuthStatus()
