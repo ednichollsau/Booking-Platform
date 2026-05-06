@@ -582,6 +582,67 @@
       `
     }
 
+    function renderCancelConfirm(token) {
+      backBtn.classList.add('hidden')
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto text-center py-12">
+          <h1 class="display text-3xl mb-3">Cancel booking?</h1>
+          <p class="text-[var(--text-muted)] mb-8">Click below to cancel your appointment. If it was paid via a package, the session will be returned to your balance.</p>
+          <div class="space-y-3">
+            <button id="cancel-confirm-btn" class="btn-primary w-full py-3 rounded-lg font-semibold">Yes, cancel my booking</button>
+            <button id="cancel-keep-btn" class="btn-secondary w-full py-3 rounded-lg font-semibold">Keep my booking</button>
+          </div>
+          <div id="cancel-result" class="mt-6 text-sm"></div>
+        </div>
+      `
+      document.getElementById('cancel-keep-btn').addEventListener('click', () => {
+        setView('home', false)
+      })
+      document.getElementById('cancel-confirm-btn').addEventListener('click', async () => {
+        const btn = document.getElementById('cancel-confirm-btn')
+        const result = document.getElementById('cancel-result')
+        btn.disabled = true; btn.textContent = 'Cancelling...'
+        try {
+          const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/cancel_booking_by_token`, {
+            method: 'POST',
+            headers: {
+              apikey: SUPABASE_KEY,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ p_token: token })
+          })
+          const data = await r.json()
+          if (data?.ok) {
+            const dt = data.starts_at ? new Date(data.starts_at) : null
+            const dateLine = dt ? `<div class="text-sm text-[var(--text-muted)] mt-2">${fmt.dateLong(dt)} at ${fmt.time(dt)}</div>` : ''
+            const pkgLine = data.session_returned_to_package
+              ? `<div class="text-sm text-[var(--accent)] font-semibold mt-3">Session returned to your package balance.</div>`
+              : ''
+            viewEl.innerHTML = `
+              <div class="view max-w-md mx-auto text-center py-12">
+                <div class="w-14 h-14 mx-auto mb-5 rounded-full bg-[var(--primary)] flex items-center justify-center">
+                  <svg class="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                </div>
+                <h1 class="display text-3xl mb-3">${data.already_cancelled ? 'Already cancelled' : 'Booking cancelled'}</h1>
+                <p class="text-[var(--text-muted)]">${data.message || ''}</p>
+                ${dateLine}
+                ${pkgLine}
+                <button id="back-home" class="btn-secondary px-6 py-3 rounded-lg mt-8">Book another session</button>
+              </div>
+            `
+            document.getElementById('back-home').addEventListener('click', () => setView('home', false))
+            await loadBookedSlots()
+          } else {
+            result.innerHTML = `<span class="text-red-600">${data?.error || 'Something went wrong.'}</span>`
+            btn.disabled = false; btn.textContent = 'Yes, cancel my booking'
+          }
+        } catch (err) {
+          result.innerHTML = `<span class="text-red-600">Error: ${err.message}</span>`
+          btn.disabled = false; btn.textContent = 'Yes, cancel my booking'
+        }
+      })
+    }
+
     function handleBookingPaidReturn() {
       const stashed = sessionStorage.getItem('booking_paid_customer')
       let info = {}
@@ -1192,8 +1253,15 @@
           ]) } catch {}
         }
         updateAuthStatus()
-        // Check for Stripe return
+        // Check for cancellation link from email
         const params = new URLSearchParams(window.location.search)
+        const cancelToken = params.get('cancel')
+        if (cancelToken) {
+          window.history.replaceState({}, '', window.location.pathname)
+          renderCancelConfirm(cancelToken)
+          return
+        }
+        // Check for Stripe return
         if (params.get('stripe_success') === '1') {
           const type = params.get('type') || 'package'
           if (type === 'booking') {
