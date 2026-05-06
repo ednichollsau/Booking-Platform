@@ -37,14 +37,26 @@
     body { background: var(--bg); color: var(--text); font-family: 'Raleway', -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }
     body.in-iframe { background: transparent; }
     .display { font-family: 'Marisa', Georgia, serif; font-weight: 500; letter-spacing: -0.02em; }
-    /* Section card wrapper — rounded corners, cream surface */
+    /* Section card wrapper - rounded corners, cream surface */
     .section-card {
       background: var(--bg);
       border-radius: 24px;
-      padding: 48px 32px;
+      overflow: hidden;
+    }
+    .section-topbar {
+      background: #EFEAE0;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .section-content {
+      padding: 40px 32px;
     }
     @media (min-width: 768px) {
-      .section-card { padding: 64px 48px; }
+      .section-topbar { padding: 16px 40px; }
+      .section-content { padding: 56px 48px; }
     }
     .view { animation: fadeIn 0.25s ease-out; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
@@ -70,15 +82,16 @@
 </head>
 <body>
   <div id="app">
-    <div class="max-w-5xl mx-auto px-4 md:px-6 pt-4 md:pt-6">
-      <div class="flex items-center justify-between mb-4 px-2">
-        <button id="back-btn" class="hidden text-sm text-[var(--text-muted)] hover:text-[var(--text)] flex items-center gap-1">← Back</button>
-        <button id="home-link" class="hidden text-sm text-[var(--text-muted)] hover:text-[var(--text)]">Home</button>
-        <div class="flex-1"></div>
-        <div id="auth-status" class="text-xs text-[var(--text-muted)]"></div>
-      </div>
+    <div class="max-w-5xl mx-auto px-4 md:px-6 pt-4 md:pt-6 pb-6">
       <section class="section-card">
-        <div id="view"></div>
+        <div class="section-topbar">
+          <button id="back-btn" class="hidden text-sm text-[var(--text-muted)] hover:text-[var(--text)]">← Back</button>
+          <div class="flex-1"></div>
+          <div id="auth-status" class="text-xs text-[var(--text-muted)]"></div>
+        </div>
+        <div class="section-content">
+          <div id="view"></div>
+        </div>
       </section>
     </div>
   </div>
@@ -143,11 +156,9 @@
       'success': 'home'
     }
 
-    const homeLink = document.getElementById('home-link')
     function updateNavVisibility(name) {
       const isLanding = name === 'home' || name === 'success'
       backBtn.classList.toggle('hidden', isLanding)
-      homeLink.classList.toggle('hidden', isLanding)
     }
 
     function setView(name, push = true) {
@@ -165,16 +176,6 @@
       }
       updateNavVisibility(state.view)
       render()
-    })
-
-    homeLink.addEventListener('click', () => {
-      state.selectedService = null
-      state.selectedPackage = null
-      state.selectedDate = null
-      state.selectedSlot = null
-      state.flow = null
-      history.length = 0
-      setView('home', false)
     })
 
     function persistIntent() {
