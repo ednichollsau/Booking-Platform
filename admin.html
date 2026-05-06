@@ -130,12 +130,27 @@
         const btn = document.getElementById('send-btn')
         btn.disabled = true; btn.textContent = 'Sending...'
         const email = e.target.email.value
-        const { error: err } = await sb.auth.signInWithOtp({
-          email,
-          options: { emailRedirectTo: window.location.origin + window.location.pathname }
-        })
-        if (err) { showAuthEmailForm(err.message); return }
-        showCheckEmail(email)
+        try {
+          const r = await fetch(`${SUPABASE_URL}/auth/v1/otp`, {
+            method: 'POST',
+            headers: {
+              apikey: SUPABASE_KEY,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              email,
+              create_user: true,
+              options: { email_redirect_to: window.location.origin + window.location.pathname }
+            })
+          })
+          if (!r.ok) {
+            const errData = await r.json().catch(() => ({}))
+            throw new Error(errData.msg || errData.error_description || `${r.status}`)
+          }
+          showCheckEmail(email)
+        } catch (err) {
+          showAuthEmailForm(err.message)
+        }
       })
     }
 
