@@ -1115,6 +1115,27 @@
       }
     })
 
+    // ============================================================
+    // IFRAME EMBED SUPPORT
+    // When loaded inside a Squarespace iframe, post our content
+    // height to the parent so it can resize the iframe smoothly.
+    // ============================================================
+    function notifyParentHeight() {
+      if (window.parent === window) return // not in an iframe
+      const h = Math.max(
+        document.documentElement.scrollHeight,
+        document.body.scrollHeight
+      )
+      window.parent.postMessage({ type: 'ed-booking-height', height: h }, '*')
+    }
+    if (window.parent !== window) {
+      const ro = new ResizeObserver(() => notifyParentHeight())
+      ro.observe(document.body)
+      // Also fire on view changes (covered by ResizeObserver but belt-and-braces)
+      const _origRender = null
+      window.addEventListener('load', notifyParentHeight)
+    }
+
     async function init() {
       viewEl.innerHTML = `<div class="space-y-6"><div class="skeleton h-12 w-2/3 mx-auto"></div><div class="grid md:grid-cols-2 gap-4"><div class="skeleton h-32"></div><div class="skeleton h-32"></div></div><div class="grid md:grid-cols-3 gap-4"><div class="skeleton h-40"></div><div class="skeleton h-40"></div><div class="skeleton h-40"></div></div></div>`
       try {
