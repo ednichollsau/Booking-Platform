@@ -44,18 +44,32 @@
       overflow: hidden;
     }
     .section-topbar {
-      background: #EFEAE0;
-      padding: 14px 24px;
+      background: #4D5D53;
+      color: #FDFAF6;
+      padding: 22px 28px;
       display: flex;
       align-items: center;
       gap: 16px;
-      border-bottom: 1px solid var(--border);
+      font-size: 1rem;
+    }
+    .section-topbar button,
+    .section-topbar a,
+    .section-topbar #auth-status {
+      color: #FDFAF6 !important;
+      font-size: 1rem;
+    }
+    .section-topbar a:hover,
+    .section-topbar button:hover {
+      opacity: 0.75;
     }
     .section-content {
       padding: 40px 32px;
     }
     @media (min-width: 768px) {
-      .section-topbar { padding: 16px 40px; }
+      .section-topbar { padding: 26px 40px; font-size: 1.0625rem; }
+      .section-topbar button,
+      .section-topbar a,
+      .section-topbar #auth-status { font-size: 1.0625rem; }
       .section-content { padding: 56px 48px; }
     }
     .view { animation: fadeIn 0.25s ease-out; }
@@ -85,9 +99,9 @@
     <div class="max-w-5xl mx-auto px-4 md:px-6 pt-4 md:pt-6 pb-6">
       <section class="section-card">
         <div class="section-topbar">
-          <button id="back-btn" class="hidden text-sm text-[var(--text-muted)] hover:text-[var(--text)]">← Back</button>
+          <button id="back-btn" class="hidden">← Back</button>
           <div class="flex-1"></div>
-          <div id="auth-status" class="text-xs text-[var(--text-muted)]"></div>
+          <div id="auth-status"></div>
         </div>
         <div class="section-content">
           <div id="view"></div>
