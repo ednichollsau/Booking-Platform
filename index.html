@@ -521,7 +521,8 @@
         const result = await response.json()
         if (result.error) throw new Error(result.error)
         if (!result.url) throw new Error('No checkout URL returned')
-        window.location.href = result.url
+        // Navigate the top window (breaks out of iframe so Stripe loads correctly)
+        ;(window.top || window).location.href = result.url
       } catch (err) {
         alert('Payment setup failed: ' + err.message)
       }
@@ -1108,7 +1109,8 @@
           })
           const result = await r.json()
           if (!result.url) throw new Error(result.error || 'No checkout URL')
-          window.location.href = result.url
+          // Navigate the top window (breaks out of iframe so Stripe loads correctly)
+          ;(window.top || window).location.href = result.url
         } catch (err) {
           alert('Payment setup failed: ' + err.message)
           onlineBtn.disabled = false; clinicBtn.disabled = false
