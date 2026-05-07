@@ -1235,11 +1235,36 @@
     }
 
     async function init() {
+      // ===== HANDLE URL-DRIVEN ENTRY POINTS FIRST =====
+      // Don't depend on data loading or auth — these stand alone.
+      const params = new URLSearchParams(window.location.search)
+      const cancelToken = params.get('cancel')
+      if (cancelToken) {
+        window.history.replaceState({}, '', window.location.pathname)
+        // Don't need any data — render directly
+        renderCancelConfirm(cancelToken)
+        return
+      }
+      if (params.get('stripe_cancel') === '1') {
+        window.history.replaceState({}, '', window.location.pathname)
+        handleStripeCancel()
+        return
+      }
+      if (params.get('stripe_success') === '1') {
+        const type = params.get('type') || 'package'
+        if (type === 'booking') {
+          // Booking-paid return doesn't need data preloaded — show success view immediately
+          handleBookingPaidReturn()
+          return
+        }
+        // Package-paid return needs auth state restored, fall through to load
+      }
+
+      // ===== NORMAL DATA LOAD =====
       viewEl.innerHTML = `<div class="space-y-6"><div class="skeleton h-12 w-2/3 mx-auto"></div><div class="grid md:grid-cols-2 gap-4"><div class="skeleton h-32"></div><div class="skeleton h-32"></div></div><div class="grid md:grid-cols-3 gap-4"><div class="skeleton h-40"></div><div class="skeleton h-40"></div><div class="skeleton h-40"></div></div></div>`
       try {
         await loadInitialData()
         await loadBookedSlots()
-        // Check if user is already signed in (with 2s timeout — auth client can hang on bad state)
         const session = await Promise.race([
           sb.auth.getSession().then(r => r.data?.session).catch(() => null),
           new Promise(resolve => setTimeout(() => resolve(null), 2000))
@@ -1253,27 +1278,9 @@
           ]) } catch {}
         }
         updateAuthStatus()
-        // Check for cancellation link from email
-        const params = new URLSearchParams(window.location.search)
-        const cancelToken = params.get('cancel')
-        if (cancelToken) {
-          window.history.replaceState({}, '', window.location.pathname)
-          renderCancelConfirm(cancelToken)
-          return
-        }
-        // Check for Stripe return
-        if (params.get('stripe_success') === '1') {
-          const type = params.get('type') || 'package'
-          if (type === 'booking') {
-            handleBookingPaidReturn()
-          } else {
-            await handleStripeReturn(params.get('session_id'))
-          }
-          return
-        }
-        if (params.get('stripe_cancel') === '1') {
-          window.history.replaceState({}, '', window.location.pathname)
-          handleStripeCancel()
+        // Package-paid return: handle now that auth is loaded
+        if (params.get('stripe_success') === '1' && (params.get('type') || 'package') === 'package') {
+          await handleStripeReturn(params.get('session_id'))
           return
         }
         render()
