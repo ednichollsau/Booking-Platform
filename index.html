@@ -295,25 +295,34 @@
 
     function generateSlots(date) {
       const dow = date.getDay()
-      const rule = state.availabilityRules.find(r => r.day_of_week === dow)
-      if (!rule) return []
-      const [sH,sM] = rule.start_time.split(':').map(Number)
-      const [eH,eM] = rule.end_time.split(':').map(Number)
+      const serviceId = state.selectedService?.id
+      const durationMin = state.selectedService?.duration_minutes || 60
+      // Rules apply if either service_id matches OR service_id is null (any service)
+      const rules = state.availabilityRules.filter(r =>
+        r.day_of_week === dow && (!r.service_id || r.service_id === serviceId)
+      )
+      if (rules.length === 0) return []
       const slots = []
-      let cur = new Date(date); cur.setHours(sH, sM, 0, 0)
-      const endT = new Date(date); endT.setHours(eH, eM, 0, 0)
       const now = new Date()
-      while (cur < endT) {
-        const slotEnd = new Date(cur.getTime() + 60*60*1000)
-        if (slotEnd > endT) break
-        if (cur < now) { cur = slotEnd; continue }
-        const isBooked = state.bookedSlots.some(b => {
-          const bs = new Date(b.starts_at), be = new Date(b.ends_at)
-          return cur < be && slotEnd > bs
-        })
-        slots.push({ start: new Date(cur), end: slotEnd, booked: isBooked })
-        cur = slotEnd
+      const slotDurMs = durationMin * 60 * 1000
+      for (const rule of rules) {
+        const [sH, sM] = rule.start_time.split(':').map(Number)
+        const [eH, eM] = rule.end_time.split(':').map(Number)
+        let cur = new Date(date); cur.setHours(sH, sM, 0, 0)
+        const endT = new Date(date); endT.setHours(eH, eM, 0, 0)
+        while (cur < endT) {
+          const slotEnd = new Date(cur.getTime() + slotDurMs)
+          if (slotEnd > endT) break
+          if (cur < now) { cur = slotEnd; continue }
+          const isBooked = state.bookedSlots.some(b => {
+            const bs = new Date(b.starts_at), be = new Date(b.ends_at)
+            return cur < be && slotEnd > bs
+          })
+          slots.push({ start: new Date(cur), end: slotEnd, booked: isBooked })
+          cur = slotEnd
+        }
       }
+      slots.sort((a, b) => a.start - b.start)
       return slots
     }
 
