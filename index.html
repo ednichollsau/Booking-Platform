@@ -180,6 +180,11 @@
       state.view = name
       updateNavVisibility(name)
       render()
+      // Scroll to top — both inside the iframe and the parent window
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      if (window.parent !== window) {
+        window.parent.postMessage({ type: 'ed-booking-scroll-top' }, '*')
+      }
     }
 
     backBtn.addEventListener('click', () => {
