@@ -326,13 +326,28 @@
       return slots
     }
 
-    function getNext30Days() {
+    function getMondayOf(date) {
+      const d = new Date(date)
+      d.setHours(0,0,0,0)
+      const day = d.getDay()
+      const diff = day === 0 ? -6 : 1 - day
+      d.setDate(d.getDate() + diff)
+      return d
+    }
+
+    function getWeekDays(weekStart) {
       const days = []
-      const start = new Date(); start.setHours(0,0,0,0)
-      for (let i = 0; i < 30; i++) {
-        const d = new Date(start); d.setDate(d.getDate() + i)
+      const todayMidnight = new Date(); todayMidnight.setHours(0,0,0,0)
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(weekStart); d.setDate(d.getDate() + i)
         const slots = generateSlots(d)
-        days.push({ date: d, hasAvailability: slots.some(s => !s.booked) })
+        const slotCount = slots.filter(s => !s.booked).length
+        days.push({
+          date: d,
+          slotCount,
+          hasAvailability: slotCount > 0,
+          isPast: d < todayMidnight,
+        })
       }
       return days
     }
@@ -722,22 +737,56 @@
     }
 
     function renderDateSelect() {
-      const days = getNext30Days()
+      // Initialise to current week's Monday on first entry
+      if (!state.weekStart) state.weekStart = getMondayOf(new Date())
+      const days = getWeekDays(state.weekStart)
+      const todayMonday = getMondayOf(new Date())
+      const canGoPrev = state.weekStart > todayMonday
+      const weekEnd = new Date(state.weekStart); weekEnd.setDate(weekEnd.getDate() + 6)
+      const monthsLabel = state.weekStart.getMonth() === weekEnd.getMonth()
+        ? `${state.weekStart.toLocaleDateString('en-GB', { day: 'numeric' })}–${weekEnd.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`
+        : `${state.weekStart.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} – ${weekEnd.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`
+
       viewEl.innerHTML = `
         <div class="view">
           <h1 class="display text-3xl md:text-4xl mb-2">${state.selectedService.name}</h1>
-          <p class="text-[var(--text-muted)] mb-8">Choose a date.</p>
-          <div class="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-7 gap-2 mb-8">
-            ${days.map((d, i) => `
-              <button data-idx="${i}" class="date-pill rounded-lg p-3 text-center ${!d.hasAvailability ? 'disabled' : ''}" ${!d.hasAvailability ? 'disabled' : ''}>
-                <div class="text-xs uppercase tracking-wide opacity-70">${d.date.toLocaleDateString('en-GB', { weekday: 'short' })}</div>
-                <div class="display text-xl my-1">${d.date.getDate()}</div>
-                <div class="text-xs opacity-70">${d.date.toLocaleDateString('en-GB', { month: 'short' })}</div>
-              </button>
-            `).join('')}
+          <p class="text-[var(--text-muted)] mb-6">Choose a date.</p>
+
+          <div class="flex items-center justify-between mb-4">
+            <button id="week-prev" class="px-3 py-2 rounded-lg ${canGoPrev ? 'btn-secondary cursor-pointer' : 'opacity-30 cursor-not-allowed'}" ${canGoPrev ? '' : 'disabled'}>← Previous week</button>
+            <div class="text-sm font-semibold">${monthsLabel}</div>
+            <button id="week-next" class="btn-secondary px-3 py-2 rounded-lg cursor-pointer">Next week →</button>
+          </div>
+
+          <div class="grid grid-cols-7 gap-2 mb-8">
+            ${days.map((d, i) => {
+              const disabled = !d.hasAvailability || d.isPast
+              return `
+                <button data-idx="${i}" class="date-pill rounded-lg p-3 text-center ${disabled ? 'disabled' : ''}" ${disabled ? 'disabled' : ''}>
+                  <div class="text-xs uppercase tracking-wide opacity-70">${d.date.toLocaleDateString('en-GB', { weekday: 'short' })}</div>
+                  <div class="display text-xl my-1">${d.date.getDate()}</div>
+                  <div class="text-xs opacity-70">${d.hasAvailability ? `${d.slotCount} slot${d.slotCount === 1 ? '' : 's'}` : '—'}</div>
+                </button>
+              `
+            }).join('')}
           </div>
         </div>
       `
+
+      const prevBtn = document.getElementById('week-prev')
+      const nextBtn = document.getElementById('week-next')
+      if (prevBtn && !prevBtn.disabled) {
+        prevBtn.addEventListener('click', () => {
+          const newStart = new Date(state.weekStart); newStart.setDate(newStart.getDate() - 7)
+          state.weekStart = newStart < todayMonday ? todayMonday : newStart
+          renderDateSelect()
+        })
+      }
+      nextBtn.addEventListener('click', () => {
+        const newStart = new Date(state.weekStart); newStart.setDate(newStart.getDate() + 7)
+        state.weekStart = newStart
+        renderDateSelect()
+      })
       viewEl.querySelectorAll('.date-pill').forEach(pill => {
         if (pill.disabled) return
         pill.addEventListener('click', () => {
