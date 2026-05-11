@@ -116,6 +116,19 @@
     const SUPABASE_URL = 'https://bdzasnbzyfkqojqqucil.supabase.co'
     const SUPABASE_KEY = 'sb_publishable_XOH_-PTfkNsPhwY5eMV_Tg_M9GPbWE5'
     const STRIPE_PUBLISHABLE_KEY = 'pk_test_51SY2F7RwdSqO1UREvGhx9E7bGQb0qF29zbqW9QZ6bLlREzHPZ0kcloIfqVVY30aSyBFjXq2XOeMKeJFaq6lstsat006cFJHzxr'
+
+    const GENERAL_CONSENT_VERSION = '2026-05-07'
+    const GENERAL_CONSENT_TEXT = `By agreeing to the terms detailed below, I willingly consent to acupuncture treatment administered by a licensed acupuncturist. I comprehend that acupuncture involves the insertion of single-use sterile needles through the skin to normalize physiological functions. I acknowledge the general safety of acupuncture but understand that potential side effects may include local bruising, minor bleeding, dizziness, fainting, pain or discomfort, and the possible exacerbation of existing symptoms. No guarantees are provided regarding its effectiveness, and I retain the right to discontinue treatment at any point.
+
+If I am pregnant or attempting to become pregnant, I will promptly inform the acupuncturist to avoid points that could induce miscarriage. Treatment during pregnancy necessitates clearance from my obstetrician.
+
+Separately, I may be offered electro-acupuncture as part of the treatment, and I understand that potential adverse effects may include mild electrical shock, pain, discomfort, and the potential worsening of pre-existing symptoms. I have the right to refuse this treatment.
+
+I recognize that acupuncture is not an exact science, and no assurances or guarantees have been made regarding treatment outcomes. I have carefully read and understood this consent form, had the opportunity to ask questions, and may seek a more detailed explanation from my practitioner if needed.
+
+I am aware of the importance of consulting with a licensed physician regarding my condition before or at any time during my acupuncture treatment.
+
+By confirming below, I affirm my voluntary consent and understanding of the entire course of treatment for both my present and any future conditions.`
     const sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
       auth: { detectSessionInUrl: true, flowType: 'implicit', persistSession: true }
     })
@@ -812,13 +825,13 @@
         if (btn.disabled) return
         btn.addEventListener('click', () => {
           state.selectedSlot = slots[parseInt(btn.dataset.idx)]
-          // Single-session: simple form, no auth required
+          // Single-session: extended booking form (no email sign-up, but collect full details)
           if (state.flow === 'single') {
             setView('booking-form')
           } else if (!state.authUser) {
             persistIntent()
             setView('auth-request')
-          } else if (!state.customer) {
+          } else if (!state.customer || !state.customer.general_consent_at) {
             setView('onboarding')
           } else {
             setView('intake')
@@ -1032,18 +1045,20 @@
     function renderBookingForm() {
       const s = state.selectedService
       const slot = state.selectedSlot
+      const consentHtml = GENERAL_CONSENT_TEXT.split('\n\n').map(p => `<p class="mb-2">${p.trim()}</p>`).join('')
       viewEl.innerHTML = `
-        <div class="view max-w-md mx-auto">
+        <div class="view max-w-2xl mx-auto">
           <h1 class="display text-3xl mb-2">Confirm your booking</h1>
           <p class="text-[var(--text-muted)] mb-6">A few details so I have your contact info and can prepare for our session.</p>
 
           <div class="card rounded-xl p-4 mb-6">
             <div class="font-semibold mb-1">${s.name}</div>
             <div class="text-sm text-[var(--text-muted)]">${fmt.dateLong(slot.start)} at ${fmt.time(slot.start)}</div>
-            <div class="text-sm text-[var(--text-muted)] mt-1">${fmt.money(s.price_pence)}</div>
+            <div class="text-sm text-[var(--text-muted)] mt-1">${fmt.money(s.price_pence)} · ${s.duration_minutes} min</div>
           </div>
 
           <form id="booking-form" class="space-y-4">
+            <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Your details</div>
             <div class="grid grid-cols-2 gap-3">
               <div>
                 <label class="block text-sm font-semibold mb-1">First name</label>
@@ -1054,13 +1069,55 @@
                 <input required name="last_name" class="input w-full px-4 py-3 rounded-lg" type="text">
               </div>
             </div>
-            <div>
-              <label class="block text-sm font-semibold mb-1">Email</label>
-              <input required name="email" class="input w-full px-4 py-3 rounded-lg" type="email">
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-semibold mb-1">Email</label>
+                <input required name="email" class="input w-full px-4 py-3 rounded-lg" type="email">
+              </div>
+              <div>
+                <label class="block text-sm font-semibold mb-1">Phone</label>
+                <input required name="phone" class="input w-full px-4 py-3 rounded-lg" type="tel">
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-semibold mb-1">Date of birth</label>
+                <input required name="date_of_birth" class="input w-full px-4 py-3 rounded-lg" type="date">
+              </div>
+              <div>
+                <label class="block text-sm font-semibold mb-1">Gender</label>
+                <select required name="gender" class="input w-full px-4 py-3 rounded-lg">
+                  <option value="">Select…</option>
+                  <option value="female">Female</option>
+                  <option value="male">Male</option>
+                  <option value="other">Other</option>
+                  <option value="prefer_not_to_say">Prefer not to say</option>
+                </select>
+              </div>
             </div>
             <div>
-              <label class="block text-sm font-semibold mb-1">Phone</label>
-              <input required name="phone" class="input w-full px-4 py-3 rounded-lg" type="tel">
+              <label class="block text-sm font-semibold mb-1">Address</label>
+              <input required name="address" class="input w-full px-4 py-3 rounded-lg" type="text" placeholder="Street, city, postcode">
+            </div>
+
+            <div class="pt-2 border-t border-[var(--border)]">
+              <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3 mt-3">Emergency contact</div>
+              <div class="space-y-3">
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="block text-sm font-semibold mb-1">Name</label>
+                    <input required name="emergency_contact_name" class="input w-full px-4 py-3 rounded-lg" type="text">
+                  </div>
+                  <div>
+                    <label class="block text-sm font-semibold mb-1">Phone</label>
+                    <input required name="emergency_contact_phone" class="input w-full px-4 py-3 rounded-lg" type="tel">
+                  </div>
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-1">Relationship</label>
+                  <input required name="emergency_contact_relationship" class="input w-full px-4 py-3 rounded-lg" type="text" placeholder="e.g. partner, parent, friend">
+                </div>
+              </div>
             </div>
 
             <div class="pt-2 border-t border-[var(--border)]">
@@ -1081,13 +1138,29 @@
               </div>
             </div>
 
+            <div class="pt-2 border-t border-[var(--border)]">
+              <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3 mt-3">Consent to treatment</div>
+              <div class="card rounded-lg p-4 bg-[var(--bg)] max-h-48 overflow-y-auto text-sm leading-relaxed text-[var(--text-muted)]">${consentHtml}</div>
+              <label class="flex items-start gap-2 text-sm pt-3">
+                <input required type="checkbox" name="general_consent" class="mt-1">
+                <span>I have read and consent to the terms above.</span>
+              </label>
+              <div class="pt-3">
+                <div class="text-sm font-semibold mb-2">Electro-acupuncture</div>
+                <div class="flex flex-col gap-2 text-sm">
+                  <label class="flex items-start gap-2"><input required type="radio" name="electro_consent" value="agree" class="mt-1"><span>I consent to electro-acupuncture if offered as part of treatment.</span></label>
+                  <label class="flex items-start gap-2"><input required type="radio" name="electro_consent" value="refuse" class="mt-1"><span>I do not consent to electro-acupuncture.</span></label>
+                </div>
+              </div>
+            </div>
+
             <label class="flex items-start gap-2 text-sm text-[var(--text-muted)] pt-2">
-              <input required type="checkbox" name="consent" class="mt-1">
+              <input required type="checkbox" name="privacy_consent" class="mt-1">
               <span>I have read and agree to the <a href="https://www.ednicholls.com/privacy-policy" target="_blank" class="underline hover:text-[var(--text)]">privacy policy</a>, and consent to my health information being processed for the purpose of providing my acupuncture treatment.</span>
             </label>
 
             <div class="pt-2 space-y-2">
-              <button id="pay-online-btn" type="button" class="btn-primary w-full py-4 rounded-lg font-semibold">Pay now</button>
+              <button id="pay-online-btn" type="button" class="btn-primary w-full py-4 rounded-lg font-semibold">Pay ${fmt.money(s.price_pence)} now</button>
               <button id="pay-clinic-btn" type="button" class="btn-secondary w-full py-4 rounded-lg font-semibold">Reserve — pay at clinic</button>
             </div>
           </form>
@@ -1105,32 +1178,55 @@
           last_name: fd.get('last_name'),
           email: fd.get('email'),
           phone: fd.get('phone'),
+          date_of_birth: fd.get('date_of_birth'),
+          gender: fd.get('gender'),
+          address: fd.get('address'),
+          emergency_contact_name: fd.get('emergency_contact_name'),
+          emergency_contact_phone: fd.get('emergency_contact_phone'),
+          emergency_contact_relationship: fd.get('emergency_contact_relationship'),
           reason: fd.get('reason'),
           medications: fd.get('medications'),
           conditions: fd.get('conditions'),
+          electro_consent: fd.get('electro_consent') === 'agree',
         }
       }
 
-      // PAY AT CLINIC: existing RPC flow
+      function rpcArgsFromData(data) {
+        return {
+          p_email: data.email,
+          p_first_name: data.first_name,
+          p_last_name: data.last_name,
+          p_phone: data.phone,
+          p_date_of_birth: data.date_of_birth,
+          p_gender: data.gender,
+          p_address: data.address,
+          p_emergency_contact_name: data.emergency_contact_name,
+          p_emergency_contact_phone: data.emergency_contact_phone,
+          p_emergency_contact_relationship: data.emergency_contact_relationship,
+          p_service_id: state.selectedService.id,
+          p_starts_at: state.selectedSlot.start.toISOString(),
+          p_ends_at: state.selectedSlot.end.toISOString(),
+          p_intake_response: {
+            reason: data.reason,
+            medications: data.medications,
+            conditions: data.conditions,
+          },
+          p_electro_acupuncture_consent: data.electro_consent,
+          p_general_consent_version: '${GENERAL_CONSENT_VERSION}'.replace(/['"$]/g, ''),
+        }
+      }
+
+      // PAY AT CLINIC: insert booking + customer via RPC
       clinicBtn.addEventListener('click', async () => {
         const data = getFormData(); if (!data) return
         clinicBtn.disabled = true; onlineBtn.disabled = true
         clinicBtn.textContent = 'Booking...'
         try {
+          const args = rpcArgsFromData(data)
+          args.p_general_consent_version = GENERAL_CONSENT_VERSION
           await authedFetch('rpc/create_anonymous_booking', {
             method: 'POST',
-            body: JSON.stringify({
-              p_email: data.email,
-              p_first_name: data.first_name,
-              p_last_name: data.last_name,
-              p_phone: data.phone,
-              p_service_id: state.selectedService.id,
-              p_starts_at: state.selectedSlot.start.toISOString(),
-              p_ends_at: state.selectedSlot.end.toISOString(),
-              p_intake_response: {
-                reason: data.reason, medications: data.medications, conditions: data.conditions
-              }
-            })
+            body: JSON.stringify(args),
           })
           state.customer = { email: data.email, first_name: data.first_name, last_name: data.last_name }
           await loadBookedSlots()
@@ -1147,7 +1243,6 @@
         const data = getFormData(); if (!data) return
         onlineBtn.disabled = true; clinicBtn.disabled = true
         onlineBtn.textContent = 'Redirecting...'
-        // Save name/email so success view can show details
         sessionStorage.setItem('booking_paid_customer', JSON.stringify({
           email: data.email, first_name: data.first_name, last_name: data.last_name,
           serviceName: state.selectedService.name,
@@ -1166,18 +1261,18 @@
                 service_id: state.selectedService.id,
                 starts_at: state.selectedSlot.start.toISOString(),
                 ends_at: state.selectedSlot.end.toISOString(),
+                general_consent_version: GENERAL_CONSENT_VERSION,
               },
               returnUrl: window.location.origin + window.location.pathname,
             })
           })
           const result = await r.json()
           if (!result.url) throw new Error(result.error || 'No checkout URL')
-          // Navigate the top window (breaks out of iframe so Stripe loads correctly)
           ;(window.top || window).location.href = result.url
         } catch (err) {
           alert('Payment setup failed: ' + err.message)
           onlineBtn.disabled = false; clinicBtn.disabled = false
-          onlineBtn.textContent = 'Pay now'
+          onlineBtn.textContent = `Pay ${fmt.money(state.selectedService.price_pence)} now`
         }
       })
     }
