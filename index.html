@@ -262,15 +262,17 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
     }
 
     async function loadInitialData() {
-      const [services, packages, contents, rules] = await Promise.all([
+      const [services, packages, contents, rules, overrides] = await Promise.all([
         rawFetch('services?select=*&active=eq.true&order=price_pence'),
         rawFetch('packages?select=*&active=eq.true&order=price_pence'),
         rawFetch('package_contents?select=*'),
         rawFetch('availability_rules?select=*'),
+        rawFetch('availability_overrides?select=*').catch(() => []),
       ])
       state.services = services || []
       state.packages = packages || []
       state.availabilityRules = rules || []
+      state.availabilityOverrides = overrides || []
       state.packageContents = {}
       for (const pc of (contents || [])) {
         if (!state.packageContents[pc.package_id]) state.packageContents[pc.package_id] = []
@@ -330,6 +332,13 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       const durationMin = svc.duration_minutes || 60
       const intervalMin = svc.slot_interval_minutes || durationMin
       const capacity = svc.concurrent_capacity || 1
+      // Block dates closed via admin override
+      const yyyy = date.getFullYear()
+      const mm = String(date.getMonth() + 1).padStart(2, '0')
+      const dd = String(date.getDate()).padStart(2, '0')
+      const localIso = `${yyyy}-${mm}-${dd}`
+      const closed = (state.availabilityOverrides || []).some(o => o.date === localIso && o.type === 'closed')
+      if (closed) return []
       const rules = state.availabilityRules.filter(r =>
         r.day_of_week === dow && (!r.service_id || r.service_id === serviceId)
       )
