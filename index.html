@@ -367,6 +367,9 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       if (rules.length === 0) return []
       const slots = []
       const now = new Date()
+      // Private appointments need 24h notice so Ed can confirm; multi-bed is fine same-day
+      const minLeadMs = (svc.slug === 'private') ? 24 * 60 * 60 * 1000 : 0
+      const earliest = new Date(now.getTime() + minLeadMs)
       const slotDurMs = durationMin * 60 * 1000
       const slotStepMs = intervalMin * 60 * 1000
       for (const rule of rules) {
@@ -377,7 +380,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         while (cur < endT) {
           const slotEnd = new Date(cur.getTime() + slotDurMs)
           if (slotEnd > endT) break
-          if (cur < now) { cur = new Date(cur.getTime() + slotStepMs); continue }
+          if (cur < earliest) { cur = new Date(cur.getTime() + slotStepMs); continue }
           // Count overlapping confirmed bookings; slot is full only at capacity
           const overlapping = state.bookedSlots.filter(b => {
             const bs = new Date(b.starts_at), be = new Date(b.ends_at)
