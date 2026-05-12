@@ -197,7 +197,8 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       'booking-form': 'slot-select',
       'intake': 'slot-select',
       'success': 'home',
-      'my-data': 'home'
+      'my-data': 'home',
+      'my-bookings': 'home'
     }
 
     function updateNavVisibility(name) {
@@ -398,7 +399,11 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
 
     function updateAuthStatus() {
       if (state.authUser) {
-        authStatusEl.innerHTML = `${state.authUser.email} · <a href="#" id="mydata-link" class="underline hover:text-[var(--text)]">Your data</a> · <a href="#" id="signout-link" class="underline hover:text-[var(--text)]">Sign out</a>`
+        authStatusEl.innerHTML = `${state.authUser.email} · <a href="#" id="mybookings-link" class="underline hover:text-[var(--text)]">My bookings</a> · <a href="#" id="mydata-link" class="underline hover:text-[var(--text)]">Your data</a> · <a href="#" id="signout-link" class="underline hover:text-[var(--text)]">Sign out</a>`
+        document.getElementById('mybookings-link')?.addEventListener('click', (e) => {
+          e.preventDefault()
+          setView('my-bookings')
+        })
         document.getElementById('mydata-link')?.addEventListener('click', (e) => {
           e.preventDefault()
           setView('my-data')
@@ -438,6 +443,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         case 'intake': return renderIntake()
         case 'success': return renderSuccess()
         case 'my-data': return renderMyData()
+        case 'my-bookings': return renderMyBookings()
         default: return renderHome()
       }
     }
@@ -1352,6 +1358,81 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           onlineBtn.textContent = `Pay ${fmt.money(state.selectedService.price_pence)} now`
         }
       })
+    }
+
+    async function renderMyBookings() {
+      viewEl.innerHTML = `<div class="view max-w-2xl mx-auto"><h1 class="display text-3xl mb-2">Your bookings</h1><p class="text-[var(--text-muted)]">Loading…</p></div>`
+      if (!state.customer) {
+        viewEl.innerHTML = `<div class="view max-w-2xl mx-auto py-8"><h1 class="display text-3xl mb-3">Your bookings</h1><p class="text-[var(--text-muted)]">No bookings yet under this account.</p></div>`
+        return
+      }
+
+      let bookings = []
+      try {
+        bookings = await authedFetch(`bookings?select=*&customer_id=eq.${state.customer.id}&order=starts_at.desc`) || []
+      } catch {}
+
+      const now = new Date()
+      const upcoming = bookings.filter(b => b.status !== 'cancelled' && new Date(b.starts_at) >= now).reverse()
+      const past = bookings.filter(b => new Date(b.starts_at) < now || b.status === 'completed' || b.status === 'cancelled').slice(0, 10)
+
+      const packageBanner = state.customerPackage && state.customerBalances?.some(x => x.sessions_remaining > 0) ? (() => {
+        const p = state.packages.find(x => x.id === state.customerPackage.package_id)
+        const lines = state.customerBalances.filter(b => b.sessions_remaining > 0).map(b => {
+          const s = state.services.find(x => x.id === b.service_id)
+          return `${b.sessions_remaining} × ${s?.name || ''}`
+        }).join(' · ')
+        const expires = state.customerPackage.expires_at ? new Date(state.customerPackage.expires_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : ''
+        return `
+          <div class="card rounded-xl p-5 mb-6 border-l-4" style="border-left-color: var(--accent)">
+            <div class="text-xs font-semibold text-[var(--accent)] uppercase tracking-widest mb-1">Active package</div>
+            <div class="font-semibold mb-1">${p?.name || ''}</div>
+            <div class="text-sm text-[var(--text-muted)]">${lines}</div>
+            ${expires ? `<div class="text-xs text-[var(--text-muted)] mt-2">Expires ${expires}</div>` : ''}
+          </div>
+        `
+      })() : ''
+
+      const renderRow = (b) => {
+        const s = state.services.find(x => x.id === b.service_id)
+        const dt = new Date(b.starts_at)
+        return `
+          <div class="card rounded-xl p-4 mb-2 flex items-center gap-4">
+            <div class="min-w-[80px] text-center">
+              <div class="display text-xl">${fmt.time(dt)}</div>
+              <div class="text-xs text-[var(--text-muted)]">${dt.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</div>
+            </div>
+            <div class="flex-1">
+              <div class="font-semibold">${s?.name || 'Session'}</div>
+              <div class="text-xs text-[var(--text-muted)] capitalize">${b.status}</div>
+            </div>
+            ${b.status === 'confirmed' && dt >= now && b.cancellation_token ? `<a href="?cancel=${b.cancellation_token}" class="text-xs text-[var(--danger,#B85450)] hover:underline">Cancel</a>` : ''}
+          </div>
+        `
+      }
+
+      viewEl.innerHTML = `
+        <div class="view max-w-2xl mx-auto">
+          <h1 class="display text-3xl mb-2">Your bookings</h1>
+          <p class="text-[var(--text-muted)] mb-6">Upcoming sessions and your recent history.</p>
+
+          ${packageBanner}
+
+          <div class="mb-8">
+            <h2 class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3">Upcoming</h2>
+            ${upcoming.length === 0
+              ? '<div class="text-sm text-[var(--text-muted)]">No upcoming sessions.</div>'
+              : upcoming.map(renderRow).join('')}
+          </div>
+
+          ${past.length > 0 ? `
+            <div>
+              <h2 class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3">Past sessions</h2>
+              ${past.map(renderRow).join('')}
+            </div>
+          ` : ''}
+        </div>
+      `
     }
 
     function renderMyData() {
