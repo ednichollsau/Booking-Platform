@@ -196,7 +196,8 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       'onboarding': 'home',
       'booking-form': 'slot-select',
       'intake': 'slot-select',
-      'success': 'home'
+      'success': 'home',
+      'my-data': 'home'
     }
 
     function updateNavVisibility(name) {
@@ -397,7 +398,11 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
 
     function updateAuthStatus() {
       if (state.authUser) {
-        authStatusEl.innerHTML = `${state.authUser.email} · <a href="#" id="signout-link" class="underline hover:text-[var(--text)]">Sign out</a>`
+        authStatusEl.innerHTML = `${state.authUser.email} · <a href="#" id="mydata-link" class="underline hover:text-[var(--text)]">Your data</a> · <a href="#" id="signout-link" class="underline hover:text-[var(--text)]">Sign out</a>`
+        document.getElementById('mydata-link')?.addEventListener('click', (e) => {
+          e.preventDefault()
+          setView('my-data')
+        })
         document.getElementById('signout-link')?.addEventListener('click', async (e) => {
           e.preventDefault()
           await sb.auth.signOut()
@@ -432,6 +437,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         case 'onboarding': return renderOnboarding()
         case 'intake': return renderIntake()
         case 'success': return renderSuccess()
+        case 'my-data': return renderMyData()
         default: return renderHome()
       }
     }
@@ -1344,6 +1350,80 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           alert('Payment setup failed: ' + err.message)
           onlineBtn.disabled = false; clinicBtn.disabled = false
           onlineBtn.textContent = `Pay ${fmt.money(state.selectedService.price_pence)} now`
+        }
+      })
+    }
+
+    function renderMyData() {
+      viewEl.innerHTML = `
+        <div class="view max-w-2xl mx-auto">
+          <h1 class="display text-3xl mb-2">Your data</h1>
+          <p class="text-[var(--text-muted)] mb-6">Under UK GDPR you have the right to access and request deletion of your personal data.</p>
+
+          <div class="card rounded-xl p-5 mb-4">
+            <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">On file</div>
+            ${state.customer ? `
+              <div class="text-sm space-y-1">
+                <div><span class="text-[var(--text-muted)]">Name:</span> ${state.customer.first_name || ''} ${state.customer.last_name || ''}</div>
+                <div><span class="text-[var(--text-muted)]">Email:</span> ${state.customer.email}</div>
+                <div><span class="text-[var(--text-muted)]">Phone:</span> ${state.customer.phone || '—'}</div>
+              </div>
+            ` : '<div class="text-sm text-[var(--text-muted)]">No customer record yet.</div>'}
+          </div>
+
+          <div class="card rounded-xl p-5 mb-4">
+            <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Download your data</div>
+            <p class="text-sm text-[var(--text-muted)] mb-3">Receive a JSON file with your customer record, all bookings, intake responses, and package history.</p>
+            <button id="dl-btn" class="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Download my data</button>
+          </div>
+
+          <div class="card rounded-xl p-5 mb-4 border-l-4" style="border-left-color: #B85450">
+            <div class="text-xs font-semibold uppercase tracking-widest mb-2" style="color:#B85450">Delete your account</div>
+            <p class="text-sm text-[var(--text-muted)] mb-3">Removes your personal identifiers (name, email, phone, contact details). Future bookings are cancelled. Clinical session records are retained for 8 years per UK acupuncture practice retention obligations.</p>
+            <button id="del-btn" class="px-4 py-2 rounded-lg text-sm font-semibold border" style="border-color:#B85450;color:#B85450">Delete my account</button>
+          </div>
+
+          <div id="data-result" class="text-sm"></div>
+        </div>
+      `
+
+      document.getElementById('dl-btn').addEventListener('click', async () => {
+        const btn = document.getElementById('dl-btn')
+        btn.disabled = true; btn.textContent = 'Preparing…'
+        try {
+          const data = await authedFetch('rpc/export_my_data', { method: 'POST', body: '{}' })
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `ednicholls-acupuncture-data-${new Date().toISOString().slice(0,10)}.json`
+          a.click()
+          URL.revokeObjectURL(url)
+          btn.disabled = false; btn.textContent = 'Download my data'
+        } catch (err) {
+          document.getElementById('data-result').innerHTML = `<span class="text-red-600">Error: ${err.message}</span>`
+          btn.disabled = false; btn.textContent = 'Download my data'
+        }
+      })
+
+      document.getElementById('del-btn').addEventListener('click', async () => {
+        if (!confirm('Delete your account? Your personal details will be anonymised and any upcoming bookings cancelled. Clinical records are retained for 8 years. This cannot be undone.')) return
+        const btn = document.getElementById('del-btn')
+        btn.disabled = true; btn.textContent = 'Deleting…'
+        try {
+          const result = await authedFetch('rpc/delete_my_account', { method: 'POST', body: '{}' })
+          if (!result?.ok) throw new Error(result?.error || 'Deletion failed')
+          await sb.auth.signOut()
+          viewEl.innerHTML = `
+            <div class="view max-w-md mx-auto text-center py-12">
+              <h1 class="display text-3xl mb-3">Account deleted</h1>
+              <p class="text-[var(--text-muted)]">${result.note || ''}</p>
+              <p class="text-[var(--text-muted)] mt-4">${result.cancelled_bookings ? `${result.cancelled_bookings} upcoming booking${result.cancelled_bookings === 1 ? '' : 's'} cancelled.` : ''}</p>
+            </div>
+          `
+        } catch (err) {
+          document.getElementById('data-result').innerHTML = `<span class="text-red-600">Error: ${err.message}</span>`
+          btn.disabled = false; btn.textContent = 'Delete my account'
         }
       })
     }
