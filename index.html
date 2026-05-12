@@ -474,12 +474,6 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
     }
 
     function renderHome() {
-      // Refresh customer + package data in the background (don't block first render)
-      if (state.authUser) {
-        loadCustomer().then(() => {
-          if (state.view === 'home') render()
-        }).catch(() => {})
-      }
       const hasActivePackage = state.customerPackage && state.customerBalances?.some(b => b.sessions_remaining > 0)
       const packageBanner = hasActivePackage ? (() => {
         const p = state.packages.find(x => x.id === state.customerPackage.package_id)
