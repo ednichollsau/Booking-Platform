@@ -741,13 +741,19 @@
       const timeSel = document.getElementById('newbk-time')
       const serviceSel = document.getElementById('newbk-service')
 
+      function localISO(d) {
+        const y = d.getFullYear()
+        const m = String(d.getMonth() + 1).padStart(2, '0')
+        const day = String(d.getDate()).padStart(2, '0')
+        return `${y}-${m}-${day}`
+      }
       function populateDates() {
         const service = state.services.find(s => s.id === serviceSel.value)
         const dates = adminGetAvailableDates(service)
         dateSel.innerHTML = dates.length === 0
           ? '<option value="">No availability — check schedule</option>'
           : dates.map(d => {
-              const iso = d.date.toISOString().slice(0, 10)
+              const iso = localISO(d.date)
               const label = d.date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
               return `<option value="${iso}">${label} (${d.slots.length} slot${d.slots.length === 1 ? '' : 's'})</option>`
             }).join('')
