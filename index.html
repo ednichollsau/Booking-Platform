@@ -1986,6 +1986,18 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           await handleStripeReturn(params.get('session_id'))
           return
         }
+        // Deep-link from confirmation email
+        const requestedView = params.get('view')
+        if (requestedView === 'my-bookings') {
+          window.history.replaceState({}, '', window.location.pathname)
+          if (state.authUser) {
+            setView('my-bookings', false)
+          } else {
+            // Not signed in yet — send them through auth, they'll land on home after
+            setView('auth-request', false)
+          }
+          return
+        }
         render()
       } catch (err) {
         viewEl.innerHTML = `<div class="text-center text-red-600">Failed to load: ${err.message}</div>`
