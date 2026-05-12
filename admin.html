@@ -270,7 +270,11 @@
       })
     })
 
-    document.getElementById('new-booking-btn').addEventListener('click', () => {
+    document.getElementById('new-booking-btn').addEventListener('click', async () => {
+      // Make sure services/customers are loaded before showing the form
+      if (!state.services?.length) {
+        try { await loadAll() } catch {}
+      }
       openNewBookingModal()
     })
 
@@ -659,11 +663,15 @@
           </div>
           <form id="newbk-form" class="space-y-3">
             <div>
-              <label class="block text-sm font-semibold mb-1">Customer email</label>
-              <input required name="email" type="email" placeholder="existing or new email" class="input w-full px-4 py-2 rounded-lg" list="cust-list">
-              <datalist id="cust-list">
-                ${state.customers.map(c => `<option value="${c.email}">${c.first_name} ${c.last_name}</option>`).join('')}
-              </datalist>
+              <label class="block text-sm font-semibold mb-1">Patient</label>
+              <select id="newbk-patient" class="input w-full px-4 py-2 rounded-lg">
+                <option value="new">+ New patient</option>
+                ${state.customers.length > 0 ? `<optgroup label="Existing patients">${state.customers.map(c => `<option value="${c.id}">${c.first_name || ''} ${c.last_name || ''} — ${c.email}</option>`).join('')}</optgroup>` : ''}
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-semibold mb-1">Email</label>
+              <input required name="email" type="email" placeholder="patient@example.com" class="input w-full px-4 py-2 rounded-lg">
             </div>
             <div class="grid grid-cols-2 gap-2">
               <div>
@@ -682,7 +690,7 @@
             <div>
               <label class="block text-sm font-semibold mb-1">Service</label>
               <select required name="service_id" id="newbk-service" class="input w-full px-4 py-2 rounded-lg">
-                ${state.services.map(s => `<option value="${s.id}">${s.name} (${s.duration_minutes} min)</option>`).join('')}
+                ${state.services.length === 0 ? '<option value="">No services found — check Supabase</option>' : state.services.map(s => `<option value="${s.id}">${s.name} (${s.duration_minutes} min)</option>`).join('')}
               </select>
             </div>
             <div>
@@ -742,15 +750,34 @@
       dateSel.addEventListener('change', populateTimes)
       populateDates()
 
-      // Autofill existing customer details when email matches
-      form.email.addEventListener('blur', () => {
-        const existing = state.customers.find(c => c.email.toLowerCase() === form.email.value.toLowerCase().trim())
-        if (existing) {
-          form.first_name.value = existing.first_name || ''
-          form.last_name.value = existing.last_name || ''
-          form.phone.value = existing.phone || ''
+      // Patient picker: existing → autofill + lock; new → clear + editable
+      const patientSel = document.getElementById('newbk-patient')
+      function applyPatient() {
+        if (patientSel.value === 'new') {
+          form.email.value = ''
+          form.first_name.value = ''
+          form.last_name.value = ''
+          form.phone.value = ''
+          form.email.readOnly = false
+          form.first_name.readOnly = false
+          form.last_name.readOnly = false
+        } else {
+          const c = state.customers.find(x => x.id === patientSel.value)
+          if (c) {
+            form.email.value = c.email || ''
+            form.first_name.value = c.first_name || ''
+            form.last_name.value = c.last_name || ''
+            form.phone.value = c.phone || ''
+            // Keep these editable so admin can correct typos
+            form.email.readOnly = false
+            form.first_name.readOnly = false
+            form.last_name.readOnly = false
+          }
         }
-      })
+      }
+      patientSel.addEventListener('change', applyPatient)
+      // Initial state: "+ New patient" → empty form
+      applyPatient()
       form.addEventListener('submit', async (e) => {
         e.preventDefault()
         const errEl = document.getElementById('newbk-error')
