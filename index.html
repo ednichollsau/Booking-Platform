@@ -123,6 +123,7 @@
           <div id="view"></div>
         </div>
       </section>
+      <div id="auth-footer" class="text-center text-xs text-[var(--text-muted)] py-4"></div>
     </div>
   </div>
 
@@ -398,26 +399,30 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
     }
 
     function updateAuthStatus() {
+      const footerEl = document.getElementById('auth-footer')
       if (state.authUser) {
-        authStatusEl.innerHTML = `${state.authUser.email} · <a href="#" id="mybookings-link" class="underline hover:text-[var(--text)]">My bookings</a> · <a href="#" id="mydata-link" class="underline hover:text-[var(--text)]">Your data</a> · <a href="#" id="signout-link" class="underline hover:text-[var(--text)]">Sign out</a>`
+        authStatusEl.innerHTML = `${state.authUser.email} · <a href="#" id="mybookings-link" class="underline hover:text-[var(--text)]">My bookings</a>`
         document.getElementById('mybookings-link')?.addEventListener('click', (e) => {
           e.preventDefault()
           setView('my-bookings')
         })
-        document.getElementById('mydata-link')?.addEventListener('click', (e) => {
-          e.preventDefault()
-          setView('my-data')
-        })
-        document.getElementById('signout-link')?.addEventListener('click', async (e) => {
-          e.preventDefault()
-          await sb.auth.signOut()
-          state.authUser = null
-          state.customer = null
-          state.customerPackage = null
-          history.length = 0
-          setView('home', false)
-          updateAuthStatus()
-        })
+        if (footerEl) {
+          footerEl.innerHTML = `<a href="#" id="mydata-link" class="underline hover:text-[var(--text)]">My data</a> · <a href="#" id="signout-link" class="underline hover:text-[var(--text)]">Sign out</a>`
+          document.getElementById('mydata-link')?.addEventListener('click', (e) => {
+            e.preventDefault()
+            setView('my-data')
+          })
+          document.getElementById('signout-link')?.addEventListener('click', async (e) => {
+            e.preventDefault()
+            await sb.auth.signOut()
+            state.authUser = null
+            state.customer = null
+            state.customerPackage = null
+            history.length = 0
+            setView('home', false)
+            updateAuthStatus()
+          })
+        }
       } else {
         authStatusEl.innerHTML = `<a href="#" id="signin-link" class="underline hover:text-[var(--text)]">Have a package? Sign in</a>`
         document.getElementById('signin-link')?.addEventListener('click', (e) => {
@@ -425,6 +430,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           state.flow = 'returning'
           setView('auth-request')
         })
+        if (footerEl) footerEl.innerHTML = ''
       }
     }
 
