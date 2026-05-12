@@ -881,16 +881,18 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         if (btn.disabled) return
         btn.addEventListener('click', () => {
           state.selectedSlot = slots[parseInt(btn.dataset.idx)]
-          // If patient is signed in AND has a complete customer record, skip the long form
+          // If patient is signed in AND we have a usable customer record on file
+          // (has a name + email, meaning they've booked before), skip the long form
           // and go straight to the lightweight confirm/intake view.
-          if (state.authUser && state.customer && state.customer.general_consent_at) {
+          const hasCustomerOnFile = !!(state.customer && state.customer.first_name && state.customer.email)
+          if (state.authUser && hasCustomerOnFile) {
             setView('intake')
           } else if (state.flow === 'single') {
             setView('booking-form')
           } else if (!state.authUser) {
             persistIntent()
             setView('auth-request')
-          } else if (!state.customer || !state.customer.general_consent_at) {
+          } else if (!hasCustomerOnFile) {
             setView('onboarding')
           } else {
             setView('intake')
