@@ -129,7 +129,27 @@
     let currentTab = 'today'
     const state = {
       bookings: [], customers: [], services: [], packages: [],
-      packageContents: {}, customerPackages: [], balances: [], availabilityRules: []
+      packageContents: {}, customerPackages: [], balances: [],
+      availabilityRules: [], availabilityOverrides: [],
+      accessToken: null
+    }
+
+    // Raw-fetch helper for Supabase REST (bypasses the JS client which hangs)
+    async function authedFetch(path, options = {}) {
+      const headers = {
+        apikey: SUPABASE_KEY,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(options.headers || {})
+      }
+      if (state.accessToken) headers.Authorization = `Bearer ${state.accessToken}`
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { ...options, headers })
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '')
+        throw new Error(`${r.status} ${txt.slice(0, 200)}`)
+      }
+      const text = await r.text()
+      return text ? JSON.parse(text) : null
     }
 
     // ============================================================
@@ -226,6 +246,7 @@
 
     sb.auth.onAuthStateChange(async (event, session) => {
       if (session?.user) {
+        state.accessToken = session.access_token
         if (session.user.email === ADMIN_EMAIL) {
           authScreen.classList.add('hidden')
           mainEl.classList.remove('hidden')
@@ -234,6 +255,7 @@
           showAccessDenied(session.user.email)
         }
       } else if (event === 'SIGNED_OUT') {
+        state.accessToken = null
         mainEl.classList.add('hidden')
         authScreen.classList.remove('hidden')
         showAuthEmailForm()
@@ -285,26 +307,26 @@
 
     async function loadAll() {
       const [bookings, customers, services, packages, contents, custPkgs, balances, rules, overrides] = await Promise.all([
-        sb.from('bookings').select('*').order('starts_at'),
-        sb.from('customers').select('*').order('created_at', { ascending: false }),
-        sb.from('services').select('*'),
-        sb.from('packages').select('*'),
-        sb.from('package_contents').select('*'),
-        sb.from('customer_packages').select('*').order('purchased_at', { ascending: false }),
-        sb.from('customer_package_balances').select('*'),
-        sb.from('availability_rules').select('*').order('day_of_week'),
-        sb.from('availability_overrides').select('*').order('date')
+        authedFetch('bookings?select=*&order=starts_at').catch(() => []),
+        authedFetch('customers?select=*&order=created_at.desc').catch(() => []),
+        authedFetch('services?select=*').catch(() => []),
+        authedFetch('packages?select=*').catch(() => []),
+        authedFetch('package_contents?select=*').catch(() => []),
+        authedFetch('customer_packages?select=*&order=purchased_at.desc').catch(() => []),
+        authedFetch('customer_package_balances?select=*').catch(() => []),
+        authedFetch('availability_rules?select=*&order=day_of_week').catch(() => []),
+        authedFetch('availability_overrides?select=*&order=date').catch(() => []),
       ])
-      state.bookings = bookings.data || []
-      state.customers = customers.data || []
-      state.services = services.data || []
-      state.packages = packages.data || []
-      state.customerPackages = custPkgs.data || []
-      state.balances = balances.data || []
-      state.availabilityRules = rules.data || []
-      state.availabilityOverrides = overrides.data || []
+      state.bookings = bookings || []
+      state.customers = customers || []
+      state.services = services || []
+      state.packages = packages || []
+      state.customerPackages = custPkgs || []
+      state.balances = balances || []
+      state.availabilityRules = rules || []
+      state.availabilityOverrides = overrides || []
       state.packageContents = {}
-      for (const pc of (contents.data || [])) {
+      for (const pc of (contents || [])) {
         if (!state.packageContents[pc.package_id]) state.packageContents[pc.package_id] = []
         state.packageContents[pc.package_id].push(pc)
       }
@@ -975,6 +997,7 @@
     // Check for existing session
     sb.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
+        state.accessToken = session.access_token
         if (session.user.email === ADMIN_EMAIL) {
           authScreen.classList.add('hidden')
           mainEl.classList.remove('hidden')
@@ -983,7 +1006,7 @@
           showAccessDenied(session.user.email)
         }
       }
-    })
+    }).catch(() => {})
   </script>
 </body>
 </html>
