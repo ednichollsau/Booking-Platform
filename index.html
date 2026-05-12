@@ -709,7 +709,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         </div>
       `
       document.getElementById('cancel-keep-btn').addEventListener('click', () => {
-        setView('home', false)
+        window.location.href = window.location.pathname
       })
       document.getElementById('cancel-confirm-btn').addEventListener('click', async () => {
         const btn = document.getElementById('cancel-confirm-btn')
@@ -743,7 +743,11 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
                 <button id="back-home" class="btn-secondary px-6 py-3 rounded-lg mt-8">Book another session</button>
               </div>
             `
-            document.getElementById('back-home').addEventListener('click', () => setView('home', false))
+            // Reload rather than setView — the cancellation flow exits init early,
+            // so services/packages/availability haven't been loaded.
+            document.getElementById('back-home').addEventListener('click', () => {
+              window.location.href = window.location.pathname
+            })
             await loadBookedSlots()
           } else {
             result.innerHTML = `<span class="text-red-600">${data?.error || 'Something went wrong.'}</span>`
@@ -1587,39 +1591,6 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         bookings = await authedFetch(`bookings?select=*&customer_id=eq.${state.customer.id}&order=starts_at.desc`) || []
       } catch {}
 
-      // ---- Diagnostic: query packages directly so we can see what's there ----
-      let allCustomerPackages = []
-      let allBalances = []
-      try {
-        allCustomerPackages = await authedFetch(`customer_packages?select=*&customer_id=eq.${state.customer.id}&order=purchased_at.desc`) || []
-      } catch (err) { console.warn('[my-bookings] customer_packages fetch failed:', err) }
-      try {
-        if (allCustomerPackages.length > 0) {
-          const ids = allCustomerPackages.map(p => p.id).join(',')
-          allBalances = await authedFetch(`customer_package_balances?select=*&customer_package_id=in.(${ids})`) || []
-        }
-      } catch (err) { console.warn('[my-bookings] balances fetch failed:', err) }
-      console.log('[my-bookings] customer:', state.customer)
-      console.log('[my-bookings] customerPackage (state):', state.customerPackage)
-      console.log('[my-bookings] customerBalances (state):', state.customerBalances)
-      console.log('[my-bookings] allCustomerPackages (fresh fetch):', allCustomerPackages)
-      console.log('[my-bookings] allBalances (fresh fetch):', allBalances)
-
-      const diagnosticBlock = `
-        <details class="card rounded-xl p-4 mb-6 text-xs text-[var(--text-muted)]">
-          <summary class="cursor-pointer font-semibold">Diagnostic info (tap to expand)</summary>
-          <div class="mt-3 space-y-1 font-mono">
-            <div>Customer ID: ${state.customer?.id || '—'}</div>
-            <div>Customer email: ${state.customer?.email || '—'}</div>
-            <div>Auth user ID: ${state.authUser?.id || '—'}</div>
-            <div>Customer.auth_user_id: ${state.customer?.auth_user_id || '—'}</div>
-            <div>Packages found: ${allCustomerPackages.length}</div>
-            ${allCustomerPackages.map(p => `<div>• ${p.id} | status=${p.status} | stripe=${p.stripe_payment_id || '—'}</div>`).join('')}
-            <div>Balances found: ${allBalances.length}</div>
-            ${allBalances.map(b => `<div>• ${b.service_id?.slice(0,8)} : ${b.sessions_remaining} remaining</div>`).join('')}
-          </div>
-        </details>
-      `
 
       const now = new Date()
       const upcoming = bookings.filter(b => b.status !== 'cancelled' && new Date(b.starts_at) >= now).reverse()
@@ -1669,7 +1640,6 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           <h1 class="display text-3xl mb-2">Your bookings</h1>
           <p class="text-[var(--text-muted)] mb-6">Upcoming sessions and your recent history.</p>
 
-          ${diagnosticBlock}
           ${packageBanner}
 
           <div class="mb-8">
