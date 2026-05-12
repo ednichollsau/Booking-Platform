@@ -346,6 +346,16 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       dateLong: d => d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
     }
 
+    // Escape user-provided strings before injecting into HTML templates.
+    // Used for anywhere we render customer.first_name / last_name / email
+    // / service.name / package.name etc. in a template literal.
+    function esc(s) {
+      if (s == null) return ''
+      return String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+    }
+
     function generateSlots(date) {
       const dow = date.getDay()
       const svc = state.selectedService
@@ -423,7 +433,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
     function updateAuthStatus() {
       const footerEl = document.getElementById('auth-footer')
       if (state.authUser) {
-        authStatusEl.innerHTML = `${state.authUser.email} · <a href="#" id="mybookings-link" class="underline hover:text-[var(--text)]">My bookings</a>`
+        authStatusEl.innerHTML = `${esc(state.authUser.email)} · <a href="#" id="mybookings-link" class="underline hover:text-[var(--text)]">My bookings</a>`
         document.getElementById('mybookings-link')?.addEventListener('click', (e) => {
           e.preventDefault()
           setView('my-bookings')
@@ -484,12 +494,12 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           .filter(b => b.sessions_remaining > 0)
           .map(b => {
             const s = state.services.find(x => x.id === b.service_id)
-            return `${b.sessions_remaining} × ${s?.name || ''}`
+            return `${b.sessions_remaining} × ${esc(s?.name || '')}`
           }).join(' · ')
         return `
           <div class="card rounded-xl p-5 mb-10 border-l-4" style="border-left-color: var(--accent)">
             <div class="text-xs font-semibold text-[var(--accent)] uppercase tracking-widest mb-1">Your active package</div>
-            <div class="font-semibold mb-1">${p?.name || ''}</div>
+            <div class="font-semibold mb-1">${esc(p?.name || '')}</div>
             <div class="text-sm text-[var(--text-muted)]">${balanceLines}</div>
             <div class="text-xs text-[var(--text-muted)] mt-2">Click a session below to book using your package.</div>
           </div>
@@ -508,11 +518,11 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
               ${state.services.map(s => `
                 <button data-service="${s.id}" class="card card-hover service-btn rounded-xl p-6 text-left">
                   <div class="flex justify-between items-start mb-2">
-                    <div class="font-semibold text-lg">${s.name}</div>
+                    <div class="font-semibold text-lg">${esc(s.name)}</div>
                     <div class="display text-2xl">${fmt.money(s.price_pence)}</div>
                   </div>
                   <div class="text-sm text-[var(--text-muted)] mb-3">${s.duration_minutes} minutes</div>
-                  <div class="text-sm text-[var(--text-muted)] leading-relaxed">${s.description || ''}</div>
+                  <div class="text-sm text-[var(--text-muted)] leading-relaxed">${esc(s.description || '')}</div>
                 </button>
               `).join('')}
             </div>
@@ -533,7 +543,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
                 const savings = fullPrice - p.price_pence
                 return `
                   <button data-package="${p.id}" class="card card-hover package-btn rounded-xl p-6 text-left">
-                    <div class="font-semibold text-lg mb-1">${p.name.split(' — ')[0]}</div>
+                    <div class="font-semibold text-lg mb-1">${esc(p.name.split(' — ')[0])}</div>
                     <div class="flex items-baseline gap-2 mb-2">
                       <div class="display text-3xl">${fmt.money(p.price_pence)}</div>
                       ${savings > 0 ? `<div class="text-xs text-[var(--text-muted)] line-through">${fmt.money(fullPrice)}</div>` : ''}
@@ -582,8 +592,8 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       const savings = fullPrice - p.price_pence
       viewEl.innerHTML = `
         <div class="view max-w-2xl mx-auto">
-          <h1 class="display text-4xl mb-2">${p.name}</h1>
-          <p class="text-[var(--text-muted)] mb-8">${p.description || ''}</p>
+          <h1 class="display text-4xl mb-2">${esc(p.name)}</h1>
+          <p class="text-[var(--text-muted)] mb-8">${esc(p.description || '')}</p>
           <div class="card rounded-xl p-8 mb-6">
             <div class="flex items-baseline gap-3 mb-6">
               <div class="display text-5xl">${fmt.money(p.price_pence)}</div>
@@ -593,7 +603,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
               <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3">Includes</div>
               ${contents.map(c => {
                 const svc = state.services.find(s => s.id === c.service_id)
-                return `<div class="flex justify-between py-3 border-b border-[var(--border)]"><div><span class="font-semibold">${c.quantity}</span> × ${svc?.name}</div><div class="text-[var(--text-muted)]">${svc?.duration_minutes} min each</div></div>`
+                return `<div class="flex justify-between py-3 border-b border-[var(--border)]"><div><span class="font-semibold">${c.quantity}</span> × ${esc(svc?.name)}</div><div class="text-[var(--text-muted)]">${svc?.duration_minutes} min each</div></div>`
               }).join('')}
               <div class="flex justify-between pt-3 text-sm text-[var(--text-muted)]"><div>Expires</div><div>12 months from purchase</div></div>
             </div>
@@ -641,6 +651,8 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
     }
 
     async function handleStripeReturn(sessionId) {
+      // Clean URL up-front so a refresh doesn't replay the same flow
+      window.history.replaceState({}, '', window.location.pathname)
       viewEl.innerHTML = `
         <div class="view max-w-md mx-auto text-center py-16">
           <div class="display text-2xl mb-4">Activating your package…</div>
@@ -655,6 +667,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         return
       }
       state.authUser = authSession.user
+      state.accessToken = authSession.access_token
       updateAuthStatus()
       await loadCustomer()
       // Poll for the customer_package created by the webhook
@@ -670,11 +683,13 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         viewEl.innerHTML = `<div class="view max-w-md mx-auto text-center py-16"><h2 class="display text-2xl mb-3">Almost there</h2><p class="text-[var(--text-muted)] mb-6">Your payment was received but the package is taking longer than expected to activate. Please refresh the page in a moment, or contact us if it doesn't appear.</p><button onclick="window.location.reload()" class="btn-primary px-6 py-3 rounded-lg">Refresh</button></div>`
         return
       }
-      state.customerPackage = cp
+      // Reload customer so customerPackage + customerBalances reflect the new package
+      await loadCustomer()
+      // If loadCustomer didn't pick it up for some reason (e.g. balance row race),
+      // fall back to what we polled.
+      if (!state.customerPackage) state.customerPackage = cp
       state.selectedPackage = state.packages.find(p => p.id === cp.package_id)
       restoreIntent()
-      // Clean URL
-      window.history.replaceState({}, '', window.location.pathname)
       // Continue to next step
       const contents = state.packageContents[state.selectedPackage.id] || []
       if (contents.length === 1) {
@@ -773,11 +788,11 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
             <svg class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
           </div>
           <h1 class="display text-4xl mb-3">Payment received</h1>
-          <p class="text-[var(--text-muted)] mb-8">${info.email ? `Confirmation will be sent to ${info.email}` : 'Confirmation will be sent to your email'}</p>
+          <p class="text-[var(--text-muted)] mb-8">${info.email ? `Confirmation will be sent to ${esc(info.email)}` : 'Confirmation will be sent to your email'}</p>
           ${info.serviceName && slotDate ? `
             <div class="card rounded-xl p-6 text-left mb-6">
               <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Your appointment</div>
-              <div class="font-semibold text-lg mb-1">${info.serviceName}</div>
+              <div class="font-semibold text-lg mb-1">${esc(info.serviceName)}</div>
               <div class="text-[var(--text-muted)]">${fmt.dateLong(slotDate)} at ${fmt.time(slotDate)}</div>
               <div class="text-sm text-[var(--accent)] font-semibold mt-3">Paid in full</div>
             </div>
@@ -807,7 +822,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
               const svc = state.services.find(s => s.id === c.service_id)
               return `<button data-service="${svc.id}" class="card card-hover service-pick rounded-xl p-5 text-left w-full">
                 <div class="flex justify-between items-center">
-                  <div><div class="font-semibold text-lg">${svc.name}</div><div class="text-sm text-[var(--text-muted)]">${svc.duration_minutes} minutes</div></div>
+                  <div><div class="font-semibold text-lg">${esc(svc.name)}</div><div class="text-sm text-[var(--text-muted)]">${svc.duration_minutes} minutes</div></div>
                   <div class="text-sm text-[var(--text-muted)]">${c.quantity} remaining</div>
                 </div>
               </button>`
@@ -836,7 +851,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
 
       viewEl.innerHTML = `
         <div class="view">
-          <h1 class="display text-3xl md:text-4xl mb-2">${state.selectedService.name}</h1>
+          <h1 class="display text-3xl md:text-4xl mb-2">${esc(state.selectedService.name)}</h1>
           <p class="text-[var(--text-muted)] mb-6">Choose a date.</p>
 
           <div class="flex items-center justify-between gap-2 mb-4">
@@ -976,7 +991,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
             </div>
             <h1 class="display text-3xl mb-2">Enter the code</h1>
             <p class="text-[var(--text-muted)] text-sm mb-1">We've sent a 6-digit code to</p>
-            <p class="font-semibold">${email}</p>
+            <p class="font-semibold">${esc(email)}</p>
           </div>
           <form id="otp-form" class="space-y-4">
             <input
@@ -1075,13 +1090,13 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         <div class="view max-w-md mx-auto">
           <h1 class="display text-3xl mb-2">Confirm your booking</h1>
           <p class="text-[var(--text-muted)] mb-6">
-            ${state.customer?.first_name ? `Welcome back, ${state.customer.first_name}.` : ''}
+            ${state.customer?.first_name ? `Welcome back, ${esc(state.customer.first_name)}.` : ''}
             ${state.recognizedAnonymous && !state.authUser ? ` <a href="#" id="not-you-link" class="underline hover:text-[var(--text)]">Not you?</a>` : ''}
           </p>
           <div class="card rounded-xl p-4 mb-6">
-            <div class="font-semibold mb-1">${s.name}</div>
+            <div class="font-semibold mb-1">${esc(s.name)}</div>
             <div class="text-sm text-[var(--text-muted)]">${fmt.dateLong(slot.start)} at ${fmt.time(slot.start)}</div>
-            <div class="text-sm text-[var(--text-muted)] mt-1">${usingPackage ? `Using ${state.selectedPackage?.name || 'your package'}` : `${fmt.money(s.price_pence)} · ${s.duration_minutes} min`}</div>
+            <div class="text-sm text-[var(--text-muted)] mt-1">${usingPackage ? `Using ${esc(state.selectedPackage?.name || 'your package')}` : `${fmt.money(s.price_pence)} · ${s.duration_minutes} min`}</div>
           </div>
           <div id="intake-error" class="hidden text-sm text-red-600 mb-3"></div>
           <div class="space-y-2">
@@ -1114,24 +1129,29 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
 
       async function createBookingDirectly(intake) {
         if (state.authUser && state.customer?.id) {
-          // Signed-in path: direct insert via REST
-          const booking = {
-            customer_id: state.customer.id,
-            service_id: state.selectedService.id,
-            customer_package_id: usingPackage ? state.customerPackage.id : null,
-            starts_at: state.selectedSlot.start.toISOString(),
-            ends_at: state.selectedSlot.end.toISOString(),
-            intake_response: intake,
-            status: 'confirmed'
-          }
-          await authedFetch('bookings', { method: 'POST', body: JSON.stringify(booking) })
           if (usingPackage) {
-            try {
-              await authedFetch(`customer_package_balances?id=eq.${balForService.id}`, {
-                method: 'PATCH',
-                body: JSON.stringify({ sessions_remaining: balForService.sessions_remaining - 1 })
+            // Atomic: booking insert + balance decrement in one transaction
+            await authedFetch('rpc/redeem_package_session', {
+              method: 'POST',
+              body: JSON.stringify({
+                p_customer_package_id: state.customerPackage.id,
+                p_service_id: state.selectedService.id,
+                p_starts_at: state.selectedSlot.start.toISOString(),
+                p_ends_at: state.selectedSlot.end.toISOString(),
+                p_intake_response: intake,
               })
-            } catch {}
+            })
+          } else {
+            // Signed-in single session — direct insert via REST
+            const booking = {
+              customer_id: state.customer.id,
+              service_id: state.selectedService.id,
+              starts_at: state.selectedSlot.start.toISOString(),
+              ends_at: state.selectedSlot.end.toISOString(),
+              intake_response: intake,
+              status: 'confirmed'
+            }
+            await authedFetch('bookings', { method: 'POST', body: JSON.stringify(booking) })
           }
         } else {
           // Anonymous-recognised path: book via the public RPC
@@ -1253,7 +1273,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           <p class="text-[var(--text-muted)] mb-6">A few details so I have your contact info and can prepare for our session.</p>
 
           <div class="card rounded-xl p-4 mb-6">
-            <div class="font-semibold mb-1">${s.name}</div>
+            <div class="font-semibold mb-1">${esc(s.name)}</div>
             <div class="text-sm text-[var(--text-muted)]">${fmt.dateLong(slot.start)} at ${fmt.time(slot.start)}</div>
             <div class="text-sm text-[var(--text-muted)] mt-1">${fmt.money(s.price_pence)} · ${s.duration_minutes} min</div>
           </div>
@@ -1602,7 +1622,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         const lines = availBalances.map(b => {
           const s = state.services.find(x => x.id === b.service_id)
           return `<div class="flex items-center justify-between py-2 border-b border-[var(--border)] last:border-0">
-            <div><span class="font-semibold">${b.sessions_remaining}</span> × ${s?.name || ''} remaining</div>
+            <div><span class="font-semibold">${b.sessions_remaining}</span> × ${esc(s?.name || '')} remaining</div>
             <button data-pkg-svc="${s?.id}" class="pkg-book-btn text-sm font-semibold text-[var(--accent)] hover:underline">Book →</button>
           </div>`
         }).join('')
@@ -1610,7 +1630,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         return `
           <div class="card rounded-xl p-5 mb-6 border-l-4" style="border-left-color: var(--accent)">
             <div class="text-xs font-semibold text-[var(--accent)] uppercase tracking-widest mb-1">Active package</div>
-            <div class="font-semibold mb-2">${p?.name || ''}</div>
+            <div class="font-semibold mb-2">${esc(p?.name || '')}</div>
             <div class="text-sm">${lines}</div>
             ${expires ? `<div class="text-xs text-[var(--text-muted)] mt-3">Expires ${expires}</div>` : ''}
           </div>
@@ -1627,8 +1647,8 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
               <div class="text-xs text-[var(--text-muted)]">${dt.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</div>
             </div>
             <div class="flex-1">
-              <div class="font-semibold">${s?.name || 'Session'}</div>
-              <div class="text-xs text-[var(--text-muted)] capitalize">${b.status}</div>
+              <div class="font-semibold">${esc(s?.name || 'Session')}</div>
+              <div class="text-xs text-[var(--text-muted)] capitalize">${esc(b.status)}</div>
             </div>
             ${b.status === 'confirmed' && dt >= now && b.cancellation_token ? `<a href="?cancel=${b.cancellation_token}" class="text-xs text-[var(--danger,#B85450)] hover:underline">Cancel</a>` : ''}
           </div>
@@ -1679,9 +1699,9 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
             <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">On file</div>
             ${state.customer ? `
               <div class="text-sm space-y-1">
-                <div><span class="text-[var(--text-muted)]">Name:</span> ${state.customer.first_name || ''} ${state.customer.last_name || ''}</div>
-                <div><span class="text-[var(--text-muted)]">Email:</span> ${state.customer.email}</div>
-                <div><span class="text-[var(--text-muted)]">Phone:</span> ${state.customer.phone || '—'}</div>
+                <div><span class="text-[var(--text-muted)]">Name:</span> ${esc(state.customer.first_name || '')} ${esc(state.customer.last_name || '')}</div>
+                <div><span class="text-[var(--text-muted)]">Email:</span> ${esc(state.customer.email)}</div>
+                <div><span class="text-[var(--text-muted)]">Phone:</span> ${esc(state.customer.phone || '—')}</div>
               </div>
             ` : '<div class="text-sm text-[var(--text-muted)]">No customer record yet.</div>'}
           </div>
@@ -1750,10 +1770,10 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
             <svg class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
           </div>
           <h1 class="display text-4xl mb-3">You're booked</h1>
-          <p class="text-[var(--text-muted)] mb-8">Confirmation sent to ${state.customer.email}</p>
+          <p class="text-[var(--text-muted)] mb-8">Confirmation sent to ${esc(state.customer.email)}</p>
           <div class="card rounded-xl p-6 text-left mb-6">
             <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Your appointment</div>
-            <div class="font-semibold text-lg mb-1">${state.selectedService.name}</div>
+            <div class="font-semibold text-lg mb-1">${esc(state.selectedService.name)}</div>
             <div class="text-[var(--text-muted)]">${fmt.dateLong(state.selectedSlot.start)} at ${fmt.time(state.selectedSlot.start)}</div>
             ${state.customerPackage ? `<div class="text-sm text-[var(--accent)] font-semibold mt-3">1 session used from your package</div>` : ''}
           </div>
