@@ -87,9 +87,22 @@
     .slot { transition: all 0.15s ease; background: var(--surface); border: 1px solid var(--border); cursor: pointer; }
     .slot:hover:not(:disabled) { border-color: var(--primary); background: rgba(92,122,110,0.04); }
     .slot:disabled { opacity: 0.4; cursor: not-allowed; }
-    .input { background: var(--surface); border: 1px solid var(--border); transition: all 0.15s ease; font-family: inherit; font-size: 1rem; }
+    .input { background: var(--surface); border: 1px solid var(--border); transition: all 0.15s ease; font-family: inherit; font-size: 1rem; border-radius: 10px !important; color: var(--text); }
     .input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(92,122,110,0.1); }
     .input.invalid, .input.invalid:focus { border-color: #B85450; background: rgba(184,84,80,0.04); box-shadow: 0 0 0 3px rgba(184,84,80,0.08); }
+    select.input {
+      appearance: none;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 4.5l3 3 3-3' stroke='%236B6660' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+      background-repeat: no-repeat;
+      background-position: right 1rem center;
+      background-size: 12px;
+      padding-right: 2.5rem;
+      cursor: pointer;
+    }
+    .card { border-radius: 10px !important; }
+    .section-card { border-radius: 10px !important; }
     .req::after { content: ' *'; color: #C8956D; font-weight: 600; }
     .consent-invalid { color: #B85450 !important; }
     .badge { background: rgba(200,149,109,0.12); color: var(--accent); }
