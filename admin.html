@@ -139,38 +139,26 @@
     function showAuthEmailForm(error = null) {
       authContent.innerHTML = `
         <h2 class="display text-xl mb-2">Sign in</h2>
-        <p class="text-sm text-[var(--text-muted)] mb-4">Enter your admin email to receive a sign-in link.</p>
+        <p class="text-sm text-[var(--text-muted)] mb-4">Admin credentials only.</p>
         <form id="auth-form" class="space-y-3">
           <input required name="email" type="email" placeholder="${ADMIN_EMAIL}" class="input w-full px-4 py-3 rounded-lg" autofocus value="${ADMIN_EMAIL}">
-          <button id="send-btn" type="submit" class="btn-primary w-full py-3 rounded-lg font-semibold">Send sign-in link</button>
+          <input required name="password" type="password" placeholder="password" class="input w-full px-4 py-3 rounded-lg">
+          <button id="send-btn" type="submit" class="btn-primary w-full py-3 rounded-lg font-semibold">Sign in</button>
           ${error ? `<p class="text-sm text-[var(--danger)]">${error}</p>` : ''}
         </form>
       `
       document.getElementById('auth-form').addEventListener('submit', async (e) => {
         e.preventDefault()
         const btn = document.getElementById('send-btn')
-        btn.disabled = true; btn.textContent = 'Sending...'
+        btn.disabled = true; btn.textContent = 'Signing in...'
         const email = e.target.email.value
+        const password = e.target.password.value
         try {
-          const r = await fetch(`${SUPABASE_URL}/auth/v1/otp`, {
-            method: 'POST',
-            headers: {
-              apikey: SUPABASE_KEY,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              email,
-              create_user: true,
-              redirect_to: window.location.origin + window.location.pathname
-            })
-          })
-          if (!r.ok) {
-            const errData = await r.json().catch(() => ({}))
-            throw new Error(errData.msg || errData.error_description || `${r.status}`)
-          }
-          showCheckEmail(email)
+          const { error: err } = await sb.auth.signInWithPassword({ email, password })
+          if (err) throw err
+          // onAuthStateChange listener handles redirect to dashboard
         } catch (err) {
-          showAuthEmailForm(err.message)
+          showAuthEmailForm(err.message || 'Sign-in failed')
         }
       })
     }
@@ -271,11 +259,21 @@
     })
 
     document.getElementById('new-booking-btn').addEventListener('click', async () => {
-      // Make sure services/customers are loaded before showing the form
-      if (!state.services?.length) {
-        try { await loadAll() } catch {}
+      try {
+        console.log('New booking clicked. services:', state.services?.length, 'customers:', state.customers?.length)
+        if (!state.services?.length) {
+          await loadAll()
+          console.log('Reloaded — services:', state.services?.length)
+        }
+        if (typeof openNewBookingModal !== 'function') {
+          alert('openNewBookingModal not defined — page may not have fully loaded. Refresh and try again.')
+          return
+        }
+        openNewBookingModal()
+      } catch (err) {
+        console.error('New booking error:', err)
+        alert('Error opening new booking: ' + (err?.message || err))
       }
-      openNewBookingModal()
     })
 
     function openModal(html) {
