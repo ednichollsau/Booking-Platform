@@ -876,7 +876,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
             body: JSON.stringify({
               email,
               create_user: true,
-              options: { email_redirect_to: window.location.origin + window.location.pathname }
+              redirect_to: window.location.origin + window.location.pathname
             })
           })
           if (!r.ok) {
