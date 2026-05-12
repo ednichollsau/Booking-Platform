@@ -105,6 +105,14 @@
     .section-card { border-radius: 10px !important; }
     .req::after { content: ' *'; color: #C8956D; font-weight: 600; }
     .consent-invalid { color: #B85450 !important; }
+    input[type="checkbox"], input[type="radio"] {
+      width: 1.25rem;
+      height: 1.25rem;
+      accent-color: var(--primary);
+      cursor: pointer;
+      flex-shrink: 0;
+      margin-top: 0.125rem;
+    }
     .badge { background: rgba(200,149,109,0.12); color: var(--accent); }
     @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
     .skeleton { background: linear-gradient(90deg, #f0ece5 25%, #f8f5ee 50%, #f0ece5 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 8px; }
@@ -873,8 +881,11 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         if (btn.disabled) return
         btn.addEventListener('click', () => {
           state.selectedSlot = slots[parseInt(btn.dataset.idx)]
-          // Single-session: extended booking form (no email sign-up, but collect full details)
-          if (state.flow === 'single') {
+          // If patient is signed in AND has a complete customer record, skip the long form
+          // and go straight to the lightweight confirm/intake view.
+          if (state.authUser && state.customer && state.customer.general_consent_at) {
+            setView('intake')
+          } else if (state.flow === 'single') {
             setView('booking-form')
           } else if (!state.authUser) {
             persistIntent()
