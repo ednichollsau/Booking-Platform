@@ -82,11 +82,12 @@
             <div class="display text-lg">Ed Nicholls Acupuncture</div>
             <div class="text-xs text-[var(--text-muted)]">Admin · <a href="#" id="signout" class="underline hover:text-[var(--text)]">Sign out</a></div>
           </div>
-          <nav class="flex gap-1 text-sm font-medium">
+          <nav class="flex items-center gap-1 text-sm font-medium">
             <button data-tab="today" class="tab active">Today</button>
             <button data-tab="upcoming" class="tab">Upcoming</button>
             <button data-tab="customers" class="tab">Customers</button>
             <button data-tab="availability" class="tab">Availability</button>
+            <button id="new-booking-btn" class="btn-primary ml-2 px-3 py-2 rounded-lg text-sm">+ New booking</button>
           </nav>
         </div>
       </header>
@@ -269,6 +270,10 @@
       })
     })
 
+    document.getElementById('new-booking-btn').addEventListener('click', () => {
+      openNewBookingModal()
+    })
+
     function openModal(html) {
       modalContentEl.innerHTML = html
       modalEl.classList.remove('hidden')
@@ -277,7 +282,7 @@
     modalEl.addEventListener('click', (e) => { if (e.target === modalEl) closeModal() })
 
     async function loadAll() {
-      const [bookings, customers, services, packages, contents, custPkgs, balances, rules] = await Promise.all([
+      const [bookings, customers, services, packages, contents, custPkgs, balances, rules, overrides] = await Promise.all([
         sb.from('bookings').select('*').order('starts_at'),
         sb.from('customers').select('*').order('created_at', { ascending: false }),
         sb.from('services').select('*'),
@@ -285,7 +290,8 @@
         sb.from('package_contents').select('*'),
         sb.from('customer_packages').select('*').order('purchased_at', { ascending: false }),
         sb.from('customer_package_balances').select('*'),
-        sb.from('availability_rules').select('*').order('day_of_week')
+        sb.from('availability_rules').select('*').order('day_of_week'),
+        sb.from('availability_overrides').select('*').order('date')
       ])
       state.bookings = bookings.data || []
       state.customers = customers.data || []
@@ -294,6 +300,7 @@
       state.customerPackages = custPkgs.data || []
       state.balances = balances.data || []
       state.availabilityRules = rules.data || []
+      state.availabilityOverrides = overrides.data || []
       state.packageContents = {}
       for (const pc of (contents.data || [])) {
         if (!state.packageContents[pc.package_id]) state.packageContents[pc.package_id] = []
@@ -432,25 +439,284 @@
     }
 
     function renderAvailability() {
+      // Group rules by day so a day can have multiple windows
+      const rulesByDay = {}
+      for (const r of state.availabilityRules) {
+        if (!rulesByDay[r.day_of_week]) rulesByDay[r.day_of_week] = []
+        rulesByDay[r.day_of_week].push(r)
+      }
+      const today = new Date().toISOString().slice(0,10)
+      const futureOverrides = state.availabilityOverrides
+        .filter(o => o.date >= today)
+        .sort((a,b) => a.date.localeCompare(b.date))
+
       viewEl.innerHTML = `
-        <div class="view max-w-2xl">
+        <div class="view max-w-3xl">
           <h1 class="display text-3xl mb-2">Weekly availability</h1>
-          <p class="text-[var(--text-muted)] mb-8">Your recurring weekly schedule. Sessions are 60 minutes.</p>
-          <div class="space-y-2">
+          <p class="text-[var(--text-muted)] mb-6">Your recurring weekly schedule. Add a window for each day you work.</p>
+          <button id="add-rule-btn" class="btn-primary px-4 py-2 rounded-lg text-sm mb-4">+ Add availability window</button>
+          <div class="space-y-2 mb-10">
             ${[1,2,3,4,5,6,0].map(dow => {
-              const rule = state.availabilityRules.find(r => r.day_of_week === dow)
-              return `<div class="card rounded-xl p-4 flex items-center gap-4">
-                <div class="font-semibold w-24">${dayNames[dow]}</div>
-                <div class="flex-1 text-[var(--text-muted)]">${rule ? `${rule.start_time.slice(0,5)} – ${rule.end_time.slice(0,5)}` : '<span class="opacity-50">Closed</span>'}</div>
-                <button data-dow="${dow}" class="edit-day text-sm text-[var(--primary)] font-semibold hover:underline">Edit</button>
+              const rules = rulesByDay[dow] || []
+              return `<div class="card rounded-xl p-4">
+                <div class="flex items-center gap-4 mb-${rules.length > 0 ? '3' : '0'}">
+                  <div class="font-semibold w-24">${dayNames[dow]}</div>
+                  <div class="flex-1 text-sm text-[var(--text-muted)]">${rules.length === 0 ? '<span class="opacity-50">Closed</span>' : `${rules.length} window${rules.length > 1 ? 's' : ''}`}</div>
+                </div>
+                ${rules.map(r => {
+                  const s = svc(r.service_id)
+                  return `<div class="flex items-center gap-3 ml-24 py-2 border-t border-[var(--border)]">
+                    <div class="text-sm">${r.start_time.slice(0,5)} – ${r.end_time.slice(0,5)}</div>
+                    <div class="text-xs text-[var(--text-muted)] flex-1">${s ? s.name : 'Any service'}</div>
+                    <button data-id="${r.id}" class="edit-rule text-xs text-[var(--primary)] hover:underline">Edit</button>
+                    <button data-id="${r.id}" class="del-rule text-xs text-[var(--danger)] hover:underline">Delete</button>
+                  </div>`
+                }).join('')}
               </div>`
             }).join('')}
           </div>
-          <p class="text-xs text-[var(--text-muted)] mt-6">In-app editing coming soon. For now you can change hours directly in Supabase Table Editor → availability_rules.</p>
+
+          <h2 class="display text-2xl mb-2">Block out dates</h2>
+          <p class="text-[var(--text-muted)] mb-4 text-sm">Holidays, training days, anything that overrides your weekly schedule.</p>
+          <button id="add-override-btn" class="btn-primary px-4 py-2 rounded-lg text-sm mb-4">+ Block a date</button>
+          <div class="space-y-2">
+            ${futureOverrides.length === 0 ? '<div class="text-sm text-[var(--text-muted)]">No upcoming closures.</div>' : futureOverrides.map(o => `
+              <div class="card rounded-xl p-4 flex items-center gap-3">
+                <div class="font-semibold">${new Date(o.date + 'T00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</div>
+                <div class="flex-1 text-sm text-[var(--text-muted)]">${o.reason || 'Closed'}</div>
+                <button data-id="${o.id}" class="del-override text-xs text-[var(--danger)] hover:underline">Remove</button>
+              </div>
+            `).join('')}
+          </div>
         </div>
       `
-      viewEl.querySelectorAll('.edit-day').forEach(btn => {
-        btn.addEventListener('click', () => alert('In-app editing coming soon. For now: open Supabase → Table Editor → availability_rules.'))
+
+      document.getElementById('add-rule-btn').addEventListener('click', () => openRuleModal())
+      document.getElementById('add-override-btn').addEventListener('click', () => openOverrideModal())
+      viewEl.querySelectorAll('.edit-rule').forEach(b => b.addEventListener('click', () => openRuleModal(b.dataset.id)))
+      viewEl.querySelectorAll('.del-rule').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('Delete this availability window?')) return
+        await sb.from('availability_rules').delete().eq('id', b.dataset.id)
+        await loadAll(); render()
+      }))
+      viewEl.querySelectorAll('.del-override').forEach(b => b.addEventListener('click', async () => {
+        if (!confirm('Remove this closure?')) return
+        await sb.from('availability_overrides').delete().eq('id', b.dataset.id)
+        await loadAll(); render()
+      }))
+    }
+
+    function openRuleModal(ruleId) {
+      const r = ruleId ? state.availabilityRules.find(x => x.id === ruleId) : null
+      modalContentEl.innerHTML = `
+        <div class="p-6">
+          <div class="flex justify-between items-center mb-4">
+            <div class="display text-xl">${r ? 'Edit' : 'Add'} availability window</div>
+            <button id="close-modal" class="text-2xl leading-none">×</button>
+          </div>
+          <form id="rule-form" class="space-y-3">
+            <div>
+              <label class="block text-sm font-semibold mb-1">Day</label>
+              <select name="day_of_week" class="input w-full px-4 py-2 rounded-lg">
+                ${[1,2,3,4,5,6,0].map(d => `<option value="${d}" ${r && r.day_of_week === d ? 'selected' : ''}>${dayNames[d]}</option>`).join('')}
+              </select>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-sm font-semibold mb-1">Start</label>
+                <input required type="time" name="start_time" value="${r ? r.start_time.slice(0,5) : '09:00'}" class="input w-full px-4 py-2 rounded-lg">
+              </div>
+              <div>
+                <label class="block text-sm font-semibold mb-1">End</label>
+                <input required type="time" name="end_time" value="${r ? r.end_time.slice(0,5) : '17:00'}" class="input w-full px-4 py-2 rounded-lg">
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm font-semibold mb-1">Service</label>
+              <select name="service_id" class="input w-full px-4 py-2 rounded-lg">
+                <option value="">Any service</option>
+                ${state.services.map(s => `<option value="${s.id}" ${r && r.service_id === s.id ? 'selected' : ''}>${s.name}</option>`).join('')}
+              </select>
+            </div>
+            <div class="flex gap-2 pt-2">
+              <button type="submit" class="btn-primary flex-1 py-2 rounded-lg font-semibold">${r ? 'Save' : 'Add'}</button>
+              <button type="button" id="cancel-btn" class="btn-secondary px-4 py-2 rounded-lg">Cancel</button>
+            </div>
+          </form>
+        </div>
+      `
+      modalEl.classList.remove('hidden')
+      document.getElementById('close-modal').addEventListener('click', closeModal)
+      document.getElementById('cancel-btn').addEventListener('click', closeModal)
+      document.getElementById('rule-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const fd = new FormData(e.target)
+        const data = {
+          day_of_week: parseInt(fd.get('day_of_week')),
+          start_time: fd.get('start_time'),
+          end_time: fd.get('end_time'),
+          service_id: fd.get('service_id') || null,
+        }
+        if (r) {
+          await sb.from('availability_rules').update(data).eq('id', r.id)
+        } else {
+          await sb.from('availability_rules').insert(data)
+        }
+        await loadAll(); closeModal(); render()
+      })
+    }
+
+    function openOverrideModal() {
+      modalContentEl.innerHTML = `
+        <div class="p-6">
+          <div class="flex justify-between items-center mb-4">
+            <div class="display text-xl">Block out a date</div>
+            <button id="close-modal" class="text-2xl leading-none">×</button>
+          </div>
+          <form id="override-form" class="space-y-3">
+            <div>
+              <label class="block text-sm font-semibold mb-1">Date</label>
+              <input required type="date" name="date" class="input w-full px-4 py-2 rounded-lg">
+            </div>
+            <div>
+              <label class="block text-sm font-semibold mb-1">Reason <span class="font-normal text-[var(--text-muted)]">(optional, internal)</span></label>
+              <input type="text" name="reason" placeholder="e.g. Holiday, Training" class="input w-full px-4 py-2 rounded-lg">
+            </div>
+            <div class="flex gap-2 pt-2">
+              <button type="submit" class="btn-primary flex-1 py-2 rounded-lg font-semibold">Block date</button>
+              <button type="button" id="cancel-btn" class="btn-secondary px-4 py-2 rounded-lg">Cancel</button>
+            </div>
+          </form>
+        </div>
+      `
+      modalEl.classList.remove('hidden')
+      document.getElementById('close-modal').addEventListener('click', closeModal)
+      document.getElementById('cancel-btn').addEventListener('click', closeModal)
+      document.getElementById('override-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const fd = new FormData(e.target)
+        await sb.from('availability_overrides').insert({
+          date: fd.get('date'),
+          type: 'closed',
+          reason: fd.get('reason') || null,
+        })
+        await loadAll(); closeModal(); render()
+      })
+    }
+
+    function openNewBookingModal() {
+      modalContentEl.innerHTML = `
+        <div class="p-6">
+          <div class="flex justify-between items-center mb-4">
+            <div class="display text-xl">New booking</div>
+            <button id="close-modal" class="text-2xl leading-none">×</button>
+          </div>
+          <form id="newbk-form" class="space-y-3">
+            <div>
+              <label class="block text-sm font-semibold mb-1">Customer email</label>
+              <input required name="email" type="email" placeholder="existing or new email" class="input w-full px-4 py-2 rounded-lg" list="cust-list">
+              <datalist id="cust-list">
+                ${state.customers.map(c => `<option value="${c.email}">${c.first_name} ${c.last_name}</option>`).join('')}
+              </datalist>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-sm font-semibold mb-1">First name</label>
+                <input required name="first_name" class="input w-full px-4 py-2 rounded-lg" type="text">
+              </div>
+              <div>
+                <label class="block text-sm font-semibold mb-1">Last name</label>
+                <input required name="last_name" class="input w-full px-4 py-2 rounded-lg" type="text">
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm font-semibold mb-1">Phone</label>
+              <input name="phone" class="input w-full px-4 py-2 rounded-lg" type="tel">
+            </div>
+            <div>
+              <label class="block text-sm font-semibold mb-1">Service</label>
+              <select required name="service_id" class="input w-full px-4 py-2 rounded-lg">
+                ${state.services.map(s => `<option value="${s.id}">${s.name} (${s.duration_minutes} min)</option>`).join('')}
+              </select>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-sm font-semibold mb-1">Date</label>
+                <input required type="date" name="date" class="input w-full px-4 py-2 rounded-lg">
+              </div>
+              <div>
+                <label class="block text-sm font-semibold mb-1">Start time</label>
+                <input required type="time" name="time" class="input w-full px-4 py-2 rounded-lg">
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm font-semibold mb-1">Notes (optional)</label>
+              <textarea name="notes" rows="2" class="input w-full px-4 py-2 rounded-lg" placeholder="Any internal notes about this booking"></textarea>
+            </div>
+            <div id="newbk-error" class="hidden text-sm text-[var(--danger)]"></div>
+            <div class="flex gap-2 pt-2">
+              <button type="submit" class="btn-primary flex-1 py-2 rounded-lg font-semibold">Create booking</button>
+              <button type="button" id="cancel-btn" class="btn-secondary px-4 py-2 rounded-lg">Cancel</button>
+            </div>
+          </form>
+        </div>
+      `
+      modalEl.classList.remove('hidden')
+      document.getElementById('close-modal').addEventListener('click', closeModal)
+      document.getElementById('cancel-btn').addEventListener('click', closeModal)
+      // Autofill existing customer details when email matches
+      const form = document.getElementById('newbk-form')
+      form.email.addEventListener('blur', () => {
+        const existing = state.customers.find(c => c.email.toLowerCase() === form.email.value.toLowerCase().trim())
+        if (existing) {
+          form.first_name.value = existing.first_name || ''
+          form.last_name.value = existing.last_name || ''
+          form.phone.value = existing.phone || ''
+        }
+      })
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const errEl = document.getElementById('newbk-error')
+        errEl.classList.add('hidden')
+        const fd = new FormData(form)
+        const email = (fd.get('email') || '').toString().toLowerCase().trim()
+        const service = state.services.find(s => s.id === fd.get('service_id'))
+        if (!service) return
+        const startsAt = new Date(fd.get('date') + 'T' + fd.get('time'))
+        const endsAt = new Date(startsAt.getTime() + service.duration_minutes * 60 * 1000)
+
+        // Find or create customer
+        let customer = state.customers.find(c => c.email.toLowerCase() === email)
+        if (!customer) {
+          const { data: created, error } = await sb.from('customers').insert({
+            email,
+            first_name: fd.get('first_name'),
+            last_name: fd.get('last_name'),
+            phone: fd.get('phone') || null,
+          }).select().single()
+          if (error) { errEl.textContent = error.message; errEl.classList.remove('hidden'); return }
+          customer = created
+        } else {
+          // Update name/phone if changed
+          await sb.from('customers').update({
+            first_name: fd.get('first_name'),
+            last_name: fd.get('last_name'),
+            phone: fd.get('phone') || customer.phone,
+          }).eq('id', customer.id)
+        }
+
+        // Create booking
+        const { error: bkErr } = await sb.from('bookings').insert({
+          customer_id: customer.id,
+          service_id: service.id,
+          starts_at: startsAt.toISOString(),
+          ends_at: endsAt.toISOString(),
+          status: 'confirmed',
+          notes: fd.get('notes') || null,
+        })
+        if (bkErr) { errEl.textContent = bkErr.message; errEl.classList.remove('hidden'); return }
+
+        await loadAll(); closeModal(); render()
       })
     }
 
