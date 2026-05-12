@@ -1399,8 +1399,58 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       window.addEventListener('load', scheduleNotify)
     }
 
+    function renderPasswordReset() {
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto py-8">
+          <h1 class="display text-3xl mb-2">Set a new password</h1>
+          <p class="text-[var(--text-muted)] mb-6">Choose a password for your admin account.</p>
+          <form id="pwd-form" class="space-y-4">
+            <input required type="password" name="password" placeholder="New password" class="input w-full px-4 py-3 rounded-lg" minlength="6">
+            <input required type="password" name="confirm" placeholder="Confirm password" class="input w-full px-4 py-3 rounded-lg" minlength="6">
+            <button id="pwd-btn" type="submit" class="btn-primary w-full py-3 rounded-lg font-semibold">Set password</button>
+            <div id="pwd-error" class="hidden text-sm text-red-600"></div>
+          </form>
+        </div>
+      `
+      document.getElementById('pwd-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const btn = document.getElementById('pwd-btn')
+        const errEl = document.getElementById('pwd-error')
+        errEl.classList.add('hidden')
+        const fd = new FormData(e.target)
+        const pw = fd.get('password')
+        if (pw !== fd.get('confirm')) {
+          errEl.textContent = 'Passwords do not match'
+          errEl.classList.remove('hidden')
+          return
+        }
+        btn.disabled = true; btn.textContent = 'Saving...'
+        try {
+          const { error } = await sb.auth.updateUser({ password: pw })
+          if (error) throw error
+          window.history.replaceState({}, '', window.location.pathname)
+          viewEl.innerHTML = `
+            <div class="view max-w-md mx-auto py-12 text-center">
+              <h1 class="display text-3xl mb-3">Password set</h1>
+              <p class="text-[var(--text-muted)] mb-6">You can now sign in to the admin dashboard.</p>
+              <a href="/admin.html" class="btn-primary inline-block px-6 py-3 rounded-lg">Go to admin</a>
+            </div>
+          `
+        } catch (err) {
+          errEl.textContent = err.message || 'Failed to set password'
+          errEl.classList.remove('hidden')
+          btn.disabled = false; btn.textContent = 'Set password'
+        }
+      })
+    }
+
     async function init() {
       // ===== HANDLE URL-DRIVEN ENTRY POINTS FIRST =====
+      // Password recovery from Supabase email lands here with #type=recovery
+      if (window.location.hash.includes('type=recovery')) {
+        renderPasswordReset()
+        return
+      }
       // Don't depend on data loading or auth — these stand alone.
       const params = new URLSearchParams(window.location.search)
       const cancelToken = params.get('cancel')
