@@ -227,11 +227,22 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       }
     }
 
+    function clearAnonymousRecognition() {
+      if (state.authUser) return // only affects anonymous-recognized state
+      state.customer = null
+      state.recognizedAnonymous = false
+    }
+
     backBtn.addEventListener('click', () => {
       if (history.length > 0) {
         state.view = history.pop()
       } else {
         state.view = PARENT_VIEW[state.view] || 'home'
+      }
+      // If we're returning to the booking-form / slot-select, drop any
+      // recognised-anonymous identity so the user starts fresh.
+      if (state.view === 'booking-form' || state.view === 'slot-select' || state.view === 'date-select' || state.view === 'home') {
+        clearAnonymousRecognition()
       }
       updateNavVisibility(state.view)
       render()
@@ -1056,7 +1067,10 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       viewEl.innerHTML = `
         <div class="view max-w-md mx-auto">
           <h1 class="display text-3xl mb-2">Confirm your booking</h1>
-          <p class="text-[var(--text-muted)] mb-6">${state.customer?.first_name ? `Welcome back, ${state.customer.first_name}.` : ''}</p>
+          <p class="text-[var(--text-muted)] mb-6">
+            ${state.customer?.first_name ? `Welcome back, ${state.customer.first_name}.` : ''}
+            ${state.recognizedAnonymous && !state.authUser ? ` <a href="#" id="not-you-link" class="underline hover:text-[var(--text)]">Not you?</a>` : ''}
+          </p>
           <div class="card rounded-xl p-4 mb-6">
             <div class="font-semibold mb-1">${s.name}</div>
             <div class="text-sm text-[var(--text-muted)]">${fmt.dateLong(slot.start)} at ${fmt.time(slot.start)}</div>
@@ -1073,6 +1087,15 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           </div>
         </div>
       `
+
+      const notYouLink = document.getElementById('not-you-link')
+      if (notYouLink) {
+        notYouLink.addEventListener('click', (e) => {
+          e.preventDefault()
+          clearAnonymousRecognition()
+          setView('booking-form')
+        })
+      }
 
       const errEl = document.getElementById('intake-error')
 
