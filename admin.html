@@ -891,11 +891,12 @@
             ${intake.conditions ? `<div class="mb-3"><div class="text-sm font-semibold mb-1">Health conditions</div><div class="text-sm text-[var(--text-muted)] whitespace-pre-wrap">${intake.conditions}</div></div>` : ''}
           </div>
           <div class="mb-6">
-            <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Your private notes</div>
-            <textarea id="notes-input" rows="4" class="input w-full px-4 py-3 rounded-lg" placeholder="Treatment notes, observations, follow-up plan...">${b.notes || ''}</textarea>
+            <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Session journal</div>
+            <textarea id="journal-input" rows="8" class="input w-full px-4 py-3 rounded-lg" placeholder="Pulse, tongue, points used, response, follow-up plan…">${b.practitioner_journal || ''}</textarea>
+            <p class="text-xs text-[var(--text-muted)] mt-2">Private clinical notes. Persists with this booking and visible in the patient's history.</p>
           </div>
           <div class="flex gap-2">
-            <button id="save-notes" class="btn-primary flex-1 py-3 rounded-lg font-semibold">Save notes</button>
+            <button id="save-journal" class="btn-primary flex-1 py-3 rounded-lg font-semibold">Save journal</button>
             ${b.status === 'confirmed' ? `<button id="mark-complete" class="btn-secondary px-4 py-3 rounded-lg font-semibold">Mark complete</button>` : ''}
             ${b.status === 'confirmed' ? `<button id="cancel-booking" class="btn-danger px-4 py-3 rounded-lg font-semibold">Cancel</button>` : ''}
           </div>
@@ -903,28 +904,54 @@
       `
       modalEl.classList.remove('hidden')
       document.getElementById('close-modal').addEventListener('click', closeModal)
-      document.getElementById('save-notes').addEventListener('click', async () => {
-        const notes = document.getElementById('notes-input').value
-        await sb.from('bookings').update({ notes }).eq('id', b.id)
-        b.notes = notes; closeModal()
+      document.getElementById('save-journal').addEventListener('click', async () => {
+        const journal = document.getElementById('journal-input').value
+        try {
+          await authedFetch(`bookings?id=eq.${b.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ practitioner_journal: journal })
+          })
+          b.practitioner_journal = journal
+          closeModal()
+        } catch (err) {
+          alert('Save failed: ' + err.message)
+        }
       })
       const completeBtn = document.getElementById('mark-complete')
       if (completeBtn) completeBtn.addEventListener('click', async () => {
-        await sb.from('bookings').update({ status: 'completed', notes: document.getElementById('notes-input').value }).eq('id', b.id)
-        await loadAll(); closeModal(); render()
+        const journal = document.getElementById('journal-input').value
+        try {
+          await authedFetch(`bookings?id=eq.${b.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ status: 'completed', practitioner_journal: journal })
+          })
+          await loadAll(); closeModal(); render()
+        } catch (err) {
+          alert('Mark complete failed: ' + err.message)
+        }
       })
       const cancelBtn = document.getElementById('cancel-booking')
       if (cancelBtn) cancelBtn.addEventListener('click', async () => {
         if (!confirm('Cancel this booking? If it was paid via package, the session will be returned to the patient.')) return
-        await sb.from('bookings').update({ status: 'cancelled' }).eq('id', b.id)
-        if (b.customer_package_id) {
-          const { data: bal } = await sb.from('customer_package_balances').select('*')
-            .eq('customer_package_id', b.customer_package_id).eq('service_id', b.service_id).single()
-          if (bal) {
-            await sb.from('customer_package_balances').update({ sessions_remaining: bal.sessions_remaining + 1 }).eq('id', bal.id)
+        try {
+          await authedFetch(`bookings?id=eq.${b.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ status: 'cancelled' })
+          })
+          if (b.customer_package_id) {
+            const bals = await authedFetch(`customer_package_balances?select=*&customer_package_id=eq.${b.customer_package_id}&service_id=eq.${b.service_id}`)
+            const bal = Array.isArray(bals) && bals[0]
+            if (bal) {
+              await authedFetch(`customer_package_balances?id=eq.${bal.id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ sessions_remaining: bal.sessions_remaining + 1 })
+              })
+            }
           }
+          await loadAll(); closeModal(); render()
+        } catch (err) {
+          alert('Cancel failed: ' + err.message)
         }
-        await loadAll(); closeModal(); render()
       })
     }
 
@@ -956,18 +983,23 @@
             }).join('')}
           </div>` : ''}
           <div class="mb-6">
-            <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3">Booking history (${bookings.length})</div>
-            ${bookings.length === 0 ? '<div class="text-sm text-[var(--text-muted)]">No bookings yet.</div>' : bookings.slice(0,10).map(b => {
+            <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3">Session history (${bookings.length})</div>
+            ${bookings.length === 0 ? '<div class="text-sm text-[var(--text-muted)]">No bookings yet.</div>' : bookings.slice(0,20).map(b => {
               const s = svc(b.service_id)
-              return `<div class="flex justify-between items-center py-2 border-b border-[var(--border)] last:border-0 text-sm">
-                <div><div class="font-medium">${s?.name}</div><div class="text-xs text-[var(--text-muted)]">${fmt.dateShort(new Date(b.starts_at))} at ${fmt.time(new Date(b.starts_at))}</div></div>
-                <span class="badge badge-${b.status}">${b.status}</span>
+              const intake = b.intake_response || {}
+              return `<div class="border-b border-[var(--border)] last:border-0 py-3">
+                <div class="flex justify-between items-center mb-1">
+                  <div><div class="font-medium">${s?.name}</div><div class="text-xs text-[var(--text-muted)]">${fmt.dateShort(new Date(b.starts_at))} at ${fmt.time(new Date(b.starts_at))}</div></div>
+                  <span class="badge badge-${b.status}">${b.status}</span>
+                </div>
+                ${intake.reason ? `<div class="text-xs text-[var(--text-muted)] mt-1"><span class="font-semibold">Reason:</span> ${intake.reason}</div>` : ''}
+                ${b.practitioner_journal ? `<div class="text-xs mt-2 p-2 bg-[var(--bg)] rounded-lg whitespace-pre-wrap">${b.practitioner_journal}</div>` : ''}
               </div>`
             }).join('')}
           </div>
           <div>
-            <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Private patient notes</div>
-            <textarea id="cust-notes" rows="3" class="input w-full px-4 py-3 rounded-lg mb-3" placeholder="General notes about this patient...">${c.notes || ''}</textarea>
+            <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Patient overview notes</div>
+            <textarea id="cust-notes" rows="3" class="input w-full px-4 py-3 rounded-lg mb-3" placeholder="Long-term patterns, ongoing context, anything not tied to a single session...">${c.notes || ''}</textarea>
             <button id="save-cust-notes" class="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Save notes</button>
           </div>
         </div>
@@ -976,8 +1008,15 @@
       document.getElementById('close-modal').addEventListener('click', closeModal)
       document.getElementById('save-cust-notes').addEventListener('click', async () => {
         const notes = document.getElementById('cust-notes').value
-        await sb.from('customers').update({ notes }).eq('id', c.id)
-        c.notes = notes; closeModal(); render()
+        try {
+          await authedFetch(`customers?id=eq.${c.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ notes })
+          })
+          c.notes = notes; closeModal(); render()
+        } catch (err) {
+          alert('Save failed: ' + err.message)
+        }
       })
     }
 
