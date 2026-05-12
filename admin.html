@@ -604,7 +604,53 @@
       })
     }
 
+    // Compute available slot start-times for a given date + service
+    function adminGenerateSlots(date, service) {
+      const dow = date.getDay()
+      const rules = state.availabilityRules.filter(r =>
+        r.day_of_week === dow && (!r.service_id || r.service_id === service.id)
+      )
+      if (rules.length === 0) return []
+      const slots = []
+      const now = new Date()
+      const slotDurMs = service.duration_minutes * 60 * 1000
+      const slotStepMs = (service.slot_interval_minutes || service.duration_minutes) * 60 * 1000
+      const capacity = service.concurrent_capacity || 1
+      for (const rule of rules) {
+        const [sH, sM] = rule.start_time.split(':').map(Number)
+        const [eH, eM] = rule.end_time.split(':').map(Number)
+        let cur = new Date(date); cur.setHours(sH, sM, 0, 0)
+        const endT = new Date(date); endT.setHours(eH, eM, 0, 0)
+        while (cur < endT) {
+          const slotEnd = new Date(cur.getTime() + slotDurMs)
+          if (slotEnd > endT) break
+          if (cur < now) { cur = new Date(cur.getTime() + slotStepMs); continue }
+          const overlapping = state.bookings.filter(b => {
+            if (b.status === 'cancelled') return false
+            const bs = new Date(b.starts_at), be = new Date(b.ends_at)
+            return cur < be && slotEnd > bs
+          }).length
+          slots.push({ start: new Date(cur), end: slotEnd, available: overlapping < capacity })
+          cur = new Date(cur.getTime() + slotStepMs)
+        }
+      }
+      slots.sort((a, b) => a.start - b.start)
+      return slots
+    }
+
+    function adminGetAvailableDates(service, days = 60) {
+      const dates = []
+      const start = new Date(); start.setHours(0,0,0,0)
+      for (let i = 0; i < days; i++) {
+        const d = new Date(start); d.setDate(d.getDate() + i)
+        const slots = adminGenerateSlots(d, service).filter(s => s.available)
+        if (slots.length > 0) dates.push({ date: d, slots })
+      }
+      return dates
+    }
+
     function openNewBookingModal() {
+      const defaultService = state.services[0]
       modalContentEl.innerHTML = `
         <div class="p-6">
           <div class="flex justify-between items-center mb-4">
@@ -635,19 +681,17 @@
             </div>
             <div>
               <label class="block text-sm font-semibold mb-1">Service</label>
-              <select required name="service_id" class="input w-full px-4 py-2 rounded-lg">
+              <select required name="service_id" id="newbk-service" class="input w-full px-4 py-2 rounded-lg">
                 ${state.services.map(s => `<option value="${s.id}">${s.name} (${s.duration_minutes} min)</option>`).join('')}
               </select>
             </div>
-            <div class="grid grid-cols-2 gap-2">
-              <div>
-                <label class="block text-sm font-semibold mb-1">Date</label>
-                <input required type="date" name="date" class="input w-full px-4 py-2 rounded-lg">
-              </div>
-              <div>
-                <label class="block text-sm font-semibold mb-1">Start time</label>
-                <input required type="time" name="time" class="input w-full px-4 py-2 rounded-lg">
-              </div>
+            <div>
+              <label class="block text-sm font-semibold mb-1">Date</label>
+              <select required name="date" id="newbk-date" class="input w-full px-4 py-2 rounded-lg"></select>
+            </div>
+            <div>
+              <label class="block text-sm font-semibold mb-1">Start time</label>
+              <select required name="time" id="newbk-time" class="input w-full px-4 py-2 rounded-lg"></select>
             </div>
             <div>
               <label class="block text-sm font-semibold mb-1">Notes (optional)</label>
@@ -664,8 +708,41 @@
       modalEl.classList.remove('hidden')
       document.getElementById('close-modal').addEventListener('click', closeModal)
       document.getElementById('cancel-btn').addEventListener('click', closeModal)
-      // Autofill existing customer details when email matches
       const form = document.getElementById('newbk-form')
+      const dateSel = document.getElementById('newbk-date')
+      const timeSel = document.getElementById('newbk-time')
+      const serviceSel = document.getElementById('newbk-service')
+
+      function populateDates() {
+        const service = state.services.find(s => s.id === serviceSel.value)
+        const dates = adminGetAvailableDates(service)
+        dateSel.innerHTML = dates.length === 0
+          ? '<option value="">No availability — check schedule</option>'
+          : dates.map(d => {
+              const iso = d.date.toISOString().slice(0, 10)
+              const label = d.date.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+              return `<option value="${iso}">${label} (${d.slots.length} slot${d.slots.length === 1 ? '' : 's'})</option>`
+            }).join('')
+        populateTimes()
+      }
+
+      function populateTimes() {
+        const service = state.services.find(s => s.id === serviceSel.value)
+        const iso = dateSel.value
+        if (!iso) { timeSel.innerHTML = '<option value="">Pick a date first</option>'; return }
+        const [y,m,d] = iso.split('-').map(Number)
+        const date = new Date(y, m-1, d)
+        const slots = adminGenerateSlots(date, service).filter(s => s.available)
+        timeSel.innerHTML = slots.length === 0
+          ? '<option value="">No times available</option>'
+          : slots.map(s => `<option value="${s.start.toTimeString().slice(0,5)}">${fmt.time(s.start)}</option>`).join('')
+      }
+
+      serviceSel.addEventListener('change', populateDates)
+      dateSel.addEventListener('change', populateTimes)
+      populateDates()
+
+      // Autofill existing customer details when email matches
       form.email.addEventListener('blur', () => {
         const existing = state.customers.find(c => c.email.toLowerCase() === form.email.value.toLowerCase().trim())
         if (existing) {
