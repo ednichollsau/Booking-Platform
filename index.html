@@ -89,6 +89,9 @@
     .slot:disabled { opacity: 0.4; cursor: not-allowed; }
     .input { background: var(--surface); border: 1px solid var(--border); transition: all 0.15s ease; font-family: inherit; font-size: 1rem; }
     .input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(92,122,110,0.1); }
+    .input.invalid, .input.invalid:focus { border-color: #B85450; background: rgba(184,84,80,0.04); box-shadow: 0 0 0 3px rgba(184,84,80,0.08); }
+    .req::after { content: ' *'; color: #C8956D; font-weight: 600; }
+    .consent-invalid { color: #B85450 !important; }
     .badge { background: rgba(200,149,109,0.12); color: var(--accent); }
     @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
     .skeleton { background: linear-gradient(90deg, #f0ece5 25%, #f8f5ee 50%, #f0ece5 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 8px; }
@@ -1062,36 +1065,36 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
             <div class="text-sm text-[var(--text-muted)] mt-1">${fmt.money(s.price_pence)} · ${s.duration_minutes} min</div>
           </div>
 
-          <form id="booking-form" class="space-y-4">
+          <form id="booking-form" class="space-y-4" novalidate>
             <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Your details</div>
             <div class="grid grid-cols-2 gap-3">
               <div>
-                <label class="block text-sm font-semibold mb-1">First name</label>
-                <input required name="first_name" class="input w-full px-4 py-3 rounded-lg" type="text">
+                <label class="block text-sm font-semibold mb-1 req">First name</label>
+                <input name="first_name" class="input w-full px-4 py-3 rounded-lg" type="text">
               </div>
               <div>
-                <label class="block text-sm font-semibold mb-1">Last name</label>
-                <input required name="last_name" class="input w-full px-4 py-3 rounded-lg" type="text">
-              </div>
-            </div>
-            <div class="grid grid-cols-2 gap-3">
-              <div>
-                <label class="block text-sm font-semibold mb-1">Email</label>
-                <input required name="email" class="input w-full px-4 py-3 rounded-lg" type="email">
-              </div>
-              <div>
-                <label class="block text-sm font-semibold mb-1">Phone</label>
-                <input required name="phone" class="input w-full px-4 py-3 rounded-lg" type="tel">
+                <label class="block text-sm font-semibold mb-1 req">Last name</label>
+                <input name="last_name" class="input w-full px-4 py-3 rounded-lg" type="text">
               </div>
             </div>
             <div class="grid grid-cols-2 gap-3">
               <div>
-                <label class="block text-sm font-semibold mb-1">Date of birth</label>
-                <input required name="date_of_birth" class="input w-full px-4 py-3 rounded-lg" type="date">
+                <label class="block text-sm font-semibold mb-1 req">Email</label>
+                <input name="email" class="input w-full px-4 py-3 rounded-lg" type="email">
               </div>
               <div>
-                <label class="block text-sm font-semibold mb-1">Gender</label>
-                <select required name="gender" class="input w-full px-4 py-3 rounded-lg">
+                <label class="block text-sm font-semibold mb-1 req">Phone</label>
+                <input name="phone" class="input w-full px-4 py-3 rounded-lg" type="tel">
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-semibold mb-1 req">Date of birth</label>
+                <input name="date_of_birth" class="input w-full px-4 py-3 rounded-lg" type="date">
+              </div>
+              <div>
+                <label class="block text-sm font-semibold mb-1 req">Gender</label>
+                <select name="gender" class="input w-full px-4 py-3 rounded-lg">
                   <option value="">Select…</option>
                   <option value="female">Female</option>
                   <option value="male">Male</option>
@@ -1100,27 +1103,23 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
                 </select>
               </div>
             </div>
-            <div>
-              <label class="block text-sm font-semibold mb-1">Address</label>
-              <input required name="address" class="input w-full px-4 py-3 rounded-lg" type="text" placeholder="Street, city, postcode">
-            </div>
 
             <div class="pt-2 border-t border-[var(--border)]">
               <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3 mt-3">Emergency contact</div>
               <div class="space-y-3">
                 <div class="grid grid-cols-2 gap-3">
                   <div>
-                    <label class="block text-sm font-semibold mb-1">Name</label>
-                    <input required name="emergency_contact_name" class="input w-full px-4 py-3 rounded-lg" type="text">
+                    <label class="block text-sm font-semibold mb-1 req">Name</label>
+                    <input name="emergency_contact_name" class="input w-full px-4 py-3 rounded-lg" type="text">
                   </div>
                   <div>
-                    <label class="block text-sm font-semibold mb-1">Phone</label>
-                    <input required name="emergency_contact_phone" class="input w-full px-4 py-3 rounded-lg" type="tel">
+                    <label class="block text-sm font-semibold mb-1 req">Phone</label>
+                    <input name="emergency_contact_phone" class="input w-full px-4 py-3 rounded-lg" type="tel">
                   </div>
                 </div>
                 <div>
-                  <label class="block text-sm font-semibold mb-1">Relationship</label>
-                  <input required name="emergency_contact_relationship" class="input w-full px-4 py-3 rounded-lg" type="text" placeholder="e.g. partner, parent, friend">
+                  <label class="block text-sm font-semibold mb-1 req">Relationship</label>
+                  <input name="emergency_contact_relationship" class="input w-full px-4 py-3 rounded-lg" type="text" placeholder="e.g. partner, parent, friend">
                 </div>
               </div>
             </div>
@@ -1129,8 +1128,8 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
               <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3 mt-3">Brief intake</div>
               <div class="space-y-3">
                 <div>
-                  <label class="block text-sm font-semibold mb-1">What brings you in?</label>
-                  <textarea required name="reason" rows="3" class="input w-full px-4 py-3 rounded-lg"></textarea>
+                  <label class="block text-sm font-semibold mb-1 req">What brings you in?</label>
+                  <textarea name="reason" rows="3" class="input w-full px-4 py-3 rounded-lg"></textarea>
                 </div>
                 <div>
                   <label class="block text-sm font-semibold mb-1">Any current medications?</label>
@@ -1146,22 +1145,15 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
             <div class="pt-2 border-t border-[var(--border)]">
               <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3 mt-3">Consent to treatment</div>
               <div class="card rounded-lg p-4 bg-[var(--bg)] max-h-48 overflow-y-auto text-sm leading-relaxed text-[var(--text-muted)]">${consentHtml}</div>
-              <label class="flex items-start gap-2 text-sm pt-3">
-                <input required type="checkbox" name="general_consent" class="mt-1">
-                <span>I have read and consent to the terms above.</span>
+              <label id="general-consent-label" class="flex items-start gap-2 text-sm pt-3">
+                <input type="checkbox" name="general_consent" class="mt-1">
+                <span class="req">I have read and consent to the terms above.</span>
               </label>
-              <div class="pt-3">
-                <div class="text-sm font-semibold mb-2">Electro-acupuncture</div>
-                <div class="flex flex-col gap-2 text-sm">
-                  <label class="flex items-start gap-2"><input required type="radio" name="electro_consent" value="agree" class="mt-1"><span>I consent to electro-acupuncture if offered as part of treatment.</span></label>
-                  <label class="flex items-start gap-2"><input required type="radio" name="electro_consent" value="refuse" class="mt-1"><span>I do not consent to electro-acupuncture.</span></label>
-                </div>
-              </div>
             </div>
 
-            <label class="flex items-start gap-2 text-sm text-[var(--text-muted)] pt-2">
-              <input required type="checkbox" name="privacy_consent" class="mt-1">
-              <span>I have read and agree to the <a href="https://www.ednicholls.com/privacy-policy" target="_blank" class="underline hover:text-[var(--text)]">privacy policy</a>, and consent to my health information being processed for the purpose of providing my acupuncture treatment.</span>
+            <label id="privacy-consent-label" class="flex items-start gap-2 text-sm text-[var(--text-muted)] pt-2">
+              <input type="checkbox" name="privacy_consent" class="mt-1">
+              <span class="req">I have read and agree to the <a href="https://www.ednicholls.com/privacy-policy" target="_blank" class="underline hover:text-[var(--text)]">privacy policy</a>, and consent to my health information being processed for the purpose of providing my acupuncture treatment.</span>
             </label>
 
             <div class="pt-2 space-y-2">
@@ -1175,8 +1167,46 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       const onlineBtn = document.getElementById('pay-online-btn')
       const clinicBtn = document.getElementById('pay-clinic-btn')
 
+      const REQUIRED_FIELDS = [
+        'first_name','last_name','email','phone','date_of_birth','gender',
+        'emergency_contact_name','emergency_contact_phone','emergency_contact_relationship',
+        'reason'
+      ]
+
+      function clearInvalid() {
+        form.querySelectorAll('.invalid').forEach(el => el.classList.remove('invalid'))
+        const gl = document.getElementById('general-consent-label')
+        const pl = document.getElementById('privacy-consent-label')
+        gl && gl.classList.remove('consent-invalid')
+        pl && pl.classList.remove('consent-invalid')
+      }
+
       function getFormData() {
-        if (!form.checkValidity()) { form.reportValidity(); return null }
+        clearInvalid()
+        let firstInvalid = null
+        for (const name of REQUIRED_FIELDS) {
+          const field = form.elements[name]
+          if (!field) continue
+          const val = (field.value || '').trim()
+          if (!val) {
+            field.classList.add('invalid')
+            if (!firstInvalid) firstInvalid = field
+          }
+        }
+        const gc = form.elements['general_consent']
+        if (!gc.checked) {
+          document.getElementById('general-consent-label').classList.add('consent-invalid')
+          if (!firstInvalid) firstInvalid = gc
+        }
+        const pc = form.elements['privacy_consent']
+        if (!pc.checked) {
+          document.getElementById('privacy-consent-label').classList.add('consent-invalid')
+          if (!firstInvalid) firstInvalid = pc
+        }
+        if (firstInvalid) {
+          firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          return null
+        }
         const fd = new FormData(form)
         return {
           first_name: fd.get('first_name'),
@@ -1185,14 +1215,12 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           phone: fd.get('phone'),
           date_of_birth: fd.get('date_of_birth'),
           gender: fd.get('gender'),
-          address: fd.get('address'),
           emergency_contact_name: fd.get('emergency_contact_name'),
           emergency_contact_phone: fd.get('emergency_contact_phone'),
           emergency_contact_relationship: fd.get('emergency_contact_relationship'),
           reason: fd.get('reason'),
-          medications: fd.get('medications'),
-          conditions: fd.get('conditions'),
-          electro_consent: fd.get('electro_consent') === 'agree',
+          medications: fd.get('medications') || '',
+          conditions: fd.get('conditions') || '',
         }
       }
 
@@ -1204,7 +1232,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           p_phone: data.phone,
           p_date_of_birth: data.date_of_birth,
           p_gender: data.gender,
-          p_address: data.address,
+          p_address: null,
           p_emergency_contact_name: data.emergency_contact_name,
           p_emergency_contact_phone: data.emergency_contact_phone,
           p_emergency_contact_relationship: data.emergency_contact_relationship,
@@ -1216,10 +1244,26 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
             medications: data.medications,
             conditions: data.conditions,
           },
-          p_electro_acupuncture_consent: data.electro_consent,
-          p_general_consent_version: '${GENERAL_CONSENT_VERSION}'.replace(/['"$]/g, ''),
+          p_electro_acupuncture_consent: null,
+          p_general_consent_version: GENERAL_CONSENT_VERSION,
         }
       }
+
+      // Clear invalid state on any input
+      form.addEventListener('input', (e) => {
+        const t = e.target
+        if (t && t.classList && t.classList.contains('invalid')) {
+          if ((t.value || '').trim()) t.classList.remove('invalid')
+        }
+        if (t && t.type === 'checkbox') {
+          if (t.name === 'general_consent' && t.checked) {
+            document.getElementById('general-consent-label').classList.remove('consent-invalid')
+          }
+          if (t.name === 'privacy_consent' && t.checked) {
+            document.getElementById('privacy-consent-label').classList.remove('consent-invalid')
+          }
+        }
+      })
 
       // PAY AT CLINIC: insert booking + customer via RPC
       clinicBtn.addEventListener('click', async () => {
