@@ -881,11 +881,11 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         if (btn.disabled) return
         btn.addEventListener('click', () => {
           state.selectedSlot = slots[parseInt(btn.dataset.idx)]
-          // If patient is signed in AND we have a usable customer record on file
-          // (has a name + email, meaning they've booked before), skip the long form
-          // and go straight to the lightweight confirm/intake view.
+          // If we have a usable customer record on file (either via auth, or via
+          // the anonymous email-recognition step), skip the long form and go
+          // straight to the lightweight confirm/intake view.
           const hasCustomerOnFile = !!(state.customer && state.customer.first_name && state.customer.email)
-          if (state.authUser && hasCustomerOnFile) {
+          if (hasCustomerOnFile && (state.authUser || state.recognizedAnonymous)) {
             setView('intake')
           } else if (state.flow === 'single') {
             setView('booking-form')
@@ -1083,23 +1083,52 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       }
 
       async function createBookingDirectly(intake) {
-        const booking = {
-          customer_id: state.customer.id,
-          service_id: state.selectedService.id,
-          customer_package_id: usingPackage ? state.customerPackage.id : null,
-          starts_at: state.selectedSlot.start.toISOString(),
-          ends_at: state.selectedSlot.end.toISOString(),
-          intake_response: intake,
-          status: 'confirmed'
-        }
-        await authedFetch('bookings', { method: 'POST', body: JSON.stringify(booking) })
-        if (usingPackage) {
-          try {
-            await authedFetch(`customer_package_balances?id=eq.${balForService.id}`, {
-              method: 'PATCH',
-              body: JSON.stringify({ sessions_remaining: balForService.sessions_remaining - 1 })
-            })
-          } catch {}
+        if (state.authUser && state.customer?.id) {
+          // Signed-in path: direct insert via REST
+          const booking = {
+            customer_id: state.customer.id,
+            service_id: state.selectedService.id,
+            customer_package_id: usingPackage ? state.customerPackage.id : null,
+            starts_at: state.selectedSlot.start.toISOString(),
+            ends_at: state.selectedSlot.end.toISOString(),
+            intake_response: intake,
+            status: 'confirmed'
+          }
+          await authedFetch('bookings', { method: 'POST', body: JSON.stringify(booking) })
+          if (usingPackage) {
+            try {
+              await authedFetch(`customer_package_balances?id=eq.${balForService.id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ sessions_remaining: balForService.sessions_remaining - 1 })
+              })
+            } catch {}
+          }
+        } else {
+          // Anonymous-recognised path: book via the public RPC
+          const args = {
+            p_email: state.customer.email,
+            p_first_name: state.customer.first_name,
+            p_last_name: state.customer.last_name,
+            p_phone: state.customer.phone,
+            p_date_of_birth: state.customer.date_of_birth,
+            p_gender: state.customer.gender,
+            p_address: null,
+            p_emergency_contact_name: state.customer.emergency_contact_name,
+            p_emergency_contact_phone: state.customer.emergency_contact_phone,
+            p_emergency_contact_relationship: state.customer.emergency_contact_relationship,
+            p_service_id: state.selectedService.id,
+            p_starts_at: state.selectedSlot.start.toISOString(),
+            p_ends_at: state.selectedSlot.end.toISOString(),
+            p_intake_response: intake,
+            p_electro_acupuncture_consent: null,
+            p_general_consent_version: GENERAL_CONSENT_VERSION,
+          }
+          const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/create_anonymous_booking`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', apikey: SUPABASE_KEY, Accept: 'application/json' },
+            body: JSON.stringify(args)
+          })
+          if (!r.ok) throw new Error(await r.text())
         }
         await loadBookedSlots()
         clearIntent()
@@ -1382,48 +1411,61 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         }
       }
 
-      // Auto-prefill from existing customer when a known email is entered
+      // If a known email is entered, swap straight to the short intake page
+      // (same as the signed-in returning-customer flow).
       const emailField = form.elements['email']
       const statusEl = document.getElementById('prefill-status')
       let lastLookedUp = ''
+      let debounceTimer = null
       async function tryPrefill() {
         const email = (emailField.value || '').trim().toLowerCase()
-        if (!email || !email.includes('@') || email === lastLookedUp) return
+        if (!email || !email.includes('@') || !email.includes('.') || email === lastLookedUp) return
         lastLookedUp = email
         statusEl.textContent = 'Checking for a previous booking…'
         statusEl.classList.remove('hidden')
+        console.log('[booking] looking up email:', email)
         try {
           const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/lookup_customer_by_email`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: SUPABASE_KEY, Accept: 'application/json' },
             body: JSON.stringify({ p_email: email })
           })
-          if (!r.ok) { statusEl.classList.add('hidden'); return }
-          const data = await r.json()
-          if (!data) { statusEl.classList.add('hidden'); return }
-          const setIfEmpty = (name, val) => {
-            const f = form.elements[name]
-            if (f && !f.value && val != null && val !== '') {
-              f.value = val
-              f.classList.remove('invalid')
-            }
+          console.log('[booking] lookup status:', r.status)
+          if (!r.ok) {
+            const body = await r.text()
+            console.warn('[booking] lookup error body:', body)
+            statusEl.textContent = `Lookup failed (${r.status}). Continue filling the form.`
+            return
           }
-          setIfEmpty('first_name', data.first_name)
-          setIfEmpty('last_name', data.last_name)
-          setIfEmpty('phone', data.phone)
-          setIfEmpty('date_of_birth', data.date_of_birth)
-          setIfEmpty('gender', data.gender)
-          setIfEmpty('emergency_contact_name', data.emergency_contact_name)
-          setIfEmpty('emergency_contact_phone', data.emergency_contact_phone)
-          setIfEmpty('emergency_contact_relationship', data.emergency_contact_relationship)
-          const name = data.first_name || 'there'
-          statusEl.textContent = `Welcome back, ${name} — your details are pre-filled. Please review and adjust if anything has changed.`
-        } catch {
+          const data = await r.json()
+          console.log('[booking] lookup data:', data)
+          if (!data) { statusEl.classList.add('hidden'); return }
+          // Recognised: stash details on state and switch view
+          state.customer = {
+            email: data.email,
+            first_name: data.first_name,
+            last_name: data.last_name,
+            phone: data.phone,
+            date_of_birth: data.date_of_birth,
+            gender: data.gender,
+            emergency_contact_name: data.emergency_contact_name,
+            emergency_contact_phone: data.emergency_contact_phone,
+            emergency_contact_relationship: data.emergency_contact_relationship,
+          }
+          state.recognizedAnonymous = true
+          setView('intake')
+        } catch (err) {
+          console.warn('[booking] lookup threw:', err)
           statusEl.classList.add('hidden')
         }
       }
       emailField.addEventListener('blur', tryPrefill)
       emailField.addEventListener('change', tryPrefill)
+      // Also debounce on input so they don't have to leave the field
+      emailField.addEventListener('input', () => {
+        clearTimeout(debounceTimer)
+        debounceTimer = setTimeout(tryPrefill, 700)
+      })
 
       // Clear invalid state on any input
       form.addEventListener('input', (e) => {
