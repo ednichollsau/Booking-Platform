@@ -474,6 +474,12 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
     }
 
     function renderHome() {
+      // Refresh customer + package data in the background (don't block first render)
+      if (state.authUser) {
+        loadCustomer().then(() => {
+          if (state.view === 'home') render()
+        }).catch(() => {})
+      }
       const hasActivePackage = state.customerPackage && state.customerBalances?.some(b => b.sessions_remaining > 0)
       const packageBanner = hasActivePackage ? (() => {
         const p = state.packages.find(x => x.id === state.customerPackage.package_id)
@@ -1569,6 +1575,11 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
 
     async function renderMyBookings() {
       viewEl.innerHTML = `<div class="view max-w-2xl mx-auto"><h1 class="display text-3xl mb-2">Your bookings</h1><p class="text-[var(--text-muted)]">Loading…</p></div>`
+      // Force-refresh customer + package data in case the webhook ran after
+      // initial sign-in and state is stale
+      if (state.authUser) {
+        try { await loadCustomer() } catch {}
+      }
       if (!state.customer) {
         viewEl.innerHTML = `<div class="view max-w-2xl mx-auto py-8"><h1 class="display text-3xl mb-3">Your bookings</h1><p class="text-[var(--text-muted)]">No bookings yet under this account.</p></div>`
         return
@@ -1585,17 +1596,21 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
 
       const packageBanner = state.customerPackage && state.customerBalances?.some(x => x.sessions_remaining > 0) ? (() => {
         const p = state.packages.find(x => x.id === state.customerPackage.package_id)
-        const lines = state.customerBalances.filter(b => b.sessions_remaining > 0).map(b => {
+        const availBalances = state.customerBalances.filter(b => b.sessions_remaining > 0)
+        const lines = availBalances.map(b => {
           const s = state.services.find(x => x.id === b.service_id)
-          return `${b.sessions_remaining} × ${s?.name || ''}`
-        }).join(' · ')
+          return `<div class="flex items-center justify-between py-2 border-b border-[var(--border)] last:border-0">
+            <div><span class="font-semibold">${b.sessions_remaining}</span> × ${s?.name || ''} remaining</div>
+            <button data-pkg-svc="${s?.id}" class="pkg-book-btn text-sm font-semibold text-[var(--accent)] hover:underline">Book →</button>
+          </div>`
+        }).join('')
         const expires = state.customerPackage.expires_at ? new Date(state.customerPackage.expires_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : ''
         return `
           <div class="card rounded-xl p-5 mb-6 border-l-4" style="border-left-color: var(--accent)">
             <div class="text-xs font-semibold text-[var(--accent)] uppercase tracking-widest mb-1">Active package</div>
-            <div class="font-semibold mb-1">${p?.name || ''}</div>
-            <div class="text-sm text-[var(--text-muted)]">${lines}</div>
-            ${expires ? `<div class="text-xs text-[var(--text-muted)] mt-2">Expires ${expires}</div>` : ''}
+            <div class="font-semibold mb-2">${p?.name || ''}</div>
+            <div class="text-sm">${lines}</div>
+            ${expires ? `<div class="text-xs text-[var(--text-muted)] mt-3">Expires ${expires}</div>` : ''}
           </div>
         `
       })() : ''
@@ -1640,6 +1655,16 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           ` : ''}
         </div>
       `
+      // Wire up the per-service "Book →" buttons in the package banner
+      viewEl.querySelectorAll('.pkg-book-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const svcId = btn.dataset.pkgSvc
+          state.selectedService = state.services.find(s => s.id === svcId)
+          state.selectedPackage = state.packages.find(p => p.id === state.customerPackage.package_id)
+          state.flow = 'package'
+          setView('date-select')
+        })
+      })
     }
 
     function renderMyData() {
