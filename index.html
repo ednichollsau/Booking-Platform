@@ -1056,55 +1056,30 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       viewEl.innerHTML = `
         <div class="view max-w-md mx-auto">
           <h1 class="display text-3xl mb-2">Confirm your booking</h1>
-          <p class="text-[var(--text-muted)] mb-6">${state.customer?.first_name ? `Welcome back, ${state.customer.first_name}. ` : ''}Just a couple of quick questions before your session.</p>
+          <p class="text-[var(--text-muted)] mb-6">${state.customer?.first_name ? `Welcome back, ${state.customer.first_name}.` : ''}</p>
           <div class="card rounded-xl p-4 mb-6">
             <div class="font-semibold mb-1">${s.name}</div>
             <div class="text-sm text-[var(--text-muted)]">${fmt.dateLong(slot.start)} at ${fmt.time(slot.start)}</div>
             <div class="text-sm text-[var(--text-muted)] mt-1">${usingPackage ? `Using ${state.selectedPackage?.name || 'your package'}` : `${fmt.money(s.price_pence)} · ${s.duration_minutes} min`}</div>
           </div>
-          <form id="intake-form" class="space-y-4">
-            <div>
-              <label class="block text-sm font-semibold mb-1 req">What brings you in?</label>
-              <textarea name="reason" rows="3" class="input w-full px-4 py-3 rounded-lg"></textarea>
-            </div>
-            <div>
-              <label class="block text-sm font-semibold mb-1">Any current medications?</label>
-              <textarea name="medications" rows="2" class="input w-full px-4 py-3 rounded-lg"></textarea>
-            </div>
-            <div>
-              <label class="block text-sm font-semibold mb-1">Any current health conditions?</label>
-              <textarea name="conditions" rows="2" class="input w-full px-4 py-3 rounded-lg"></textarea>
-            </div>
-            <div id="intake-error" class="hidden text-sm text-red-600"></div>
-            <div class="pt-2 space-y-2">
-              ${showPayChoice ? `
-                <button id="pay-online-btn" type="button" class="btn-primary w-full py-4 rounded-lg font-semibold">Pay ${fmt.money(s.price_pence)} now</button>
-                <button id="pay-clinic-btn" type="button" class="btn-secondary w-full py-4 rounded-lg font-semibold">Reserve — pay at clinic</button>
-              ` : `
-                <button id="confirm-btn" type="submit" class="btn-primary w-full py-4 rounded-lg font-semibold">Confirm booking</button>
-              `}
-            </div>
-          </form>
+          <div id="intake-error" class="hidden text-sm text-red-600 mb-3"></div>
+          <div class="space-y-2">
+            ${showPayChoice ? `
+              <button id="pay-online-btn" type="button" class="btn-primary w-full py-4 rounded-lg font-semibold">Pay ${fmt.money(s.price_pence)} now</button>
+              <button id="pay-clinic-btn" type="button" class="btn-secondary w-full py-4 rounded-lg font-semibold">Reserve — pay at clinic</button>
+            ` : `
+              <button id="confirm-btn" type="button" class="btn-primary w-full py-4 rounded-lg font-semibold">Confirm booking</button>
+            `}
+          </div>
         </div>
       `
 
-      const form = document.getElementById('intake-form')
       const errEl = document.getElementById('intake-error')
 
+      // Returning customers don't need to re-fill intake on every booking.
+      // Pass null so the booking row has no per-session intake response.
       function getIntake() {
-        const reasonEl = form.elements['reason']
-        const reason = (reasonEl.value || '').trim()
-        if (!reason) {
-          reasonEl.classList.add('invalid')
-          reasonEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
-          return null
-        }
-        reasonEl.classList.remove('invalid')
-        return {
-          reason,
-          medications: (form.elements['medications'].value || '').trim(),
-          conditions: (form.elements['conditions'].value || '').trim(),
-        }
+        return null
       }
 
       async function createBookingDirectly(intake) {
@@ -1131,12 +1106,11 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         setView('success', false)
       }
 
-      // Package customer OR signed-in single via "Reserve — pay at clinic"
+      // Package customer
       const confirmBtn = document.getElementById('confirm-btn')
       if (confirmBtn) {
-        form.addEventListener('submit', async (e) => {
-          e.preventDefault()
-          const intake = getIntake(); if (!intake) return
+        confirmBtn.addEventListener('click', async () => {
+          const intake = getIntake()
           confirmBtn.disabled = true; confirmBtn.textContent = 'Booking…'
           try {
             await createBookingDirectly(intake)
@@ -1150,7 +1124,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       const clinicBtn = document.getElementById('pay-clinic-btn')
       if (clinicBtn) {
         clinicBtn.addEventListener('click', async () => {
-          const intake = getIntake(); if (!intake) return
+          const intake = getIntake()
           clinicBtn.disabled = true; clinicBtn.textContent = 'Booking…'
           try {
             await createBookingDirectly(intake)
@@ -1164,7 +1138,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       const onlineBtn = document.getElementById('pay-online-btn')
       if (onlineBtn) {
         onlineBtn.addEventListener('click', async () => {
-          const intake = getIntake(); if (!intake) return
+          const intake = getIntake()
           onlineBtn.disabled = true; onlineBtn.textContent = 'Redirecting…'
           sessionStorage.setItem('booking_paid_customer', JSON.stringify({
             email: state.customer.email,
@@ -1191,9 +1165,9 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
                   service_id: state.selectedService.id,
                   starts_at: state.selectedSlot.start.toISOString(),
                   ends_at: state.selectedSlot.end.toISOString(),
-                  reason: intake.reason,
-                  medications: intake.medications,
-                  conditions: intake.conditions,
+                  reason: intake?.reason || '',
+                  medications: intake?.medications || '',
+                  conditions: intake?.conditions || '',
                   general_consent_version: GENERAL_CONSENT_VERSION,
                 },
                 returnUrl: window.location.origin + window.location.pathname,
