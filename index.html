@@ -1201,6 +1201,11 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
 
           <form id="booking-form" class="space-y-4" novalidate>
             <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Your details</div>
+            <div>
+              <label class="block text-sm font-semibold mb-1 req">Email</label>
+              <input name="email" class="input w-full px-4 py-3 rounded-lg" type="email" autocomplete="email">
+              <div id="prefill-status" class="text-xs text-[var(--text-muted)] mt-1 hidden"></div>
+            </div>
             <div class="grid grid-cols-2 gap-3">
               <div>
                 <label class="block text-sm font-semibold mb-1 req">First name</label>
@@ -1213,29 +1218,23 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
             </div>
             <div class="grid grid-cols-2 gap-3">
               <div>
-                <label class="block text-sm font-semibold mb-1 req">Email</label>
-                <input name="email" class="input w-full px-4 py-3 rounded-lg" type="email">
-              </div>
-              <div>
                 <label class="block text-sm font-semibold mb-1 req">Phone</label>
                 <input name="phone" class="input w-full px-4 py-3 rounded-lg" type="tel">
               </div>
-            </div>
-            <div class="grid grid-cols-2 gap-3">
               <div>
                 <label class="block text-sm font-semibold mb-1 req">Date of birth</label>
                 <input name="date_of_birth" class="input w-full px-4 py-3 rounded-lg" type="date">
               </div>
-              <div>
-                <label class="block text-sm font-semibold mb-1 req">Gender</label>
-                <select name="gender" class="input w-full px-4 py-3 rounded-lg">
-                  <option value="">Select…</option>
-                  <option value="female">Female</option>
-                  <option value="male">Male</option>
-                  <option value="other">Other</option>
-                  <option value="prefer_not_to_say">Prefer not to say</option>
-                </select>
-              </div>
+            </div>
+            <div>
+              <label class="block text-sm font-semibold mb-1 req">Gender</label>
+              <select name="gender" class="input w-full px-4 py-3 rounded-lg">
+                <option value="">Select…</option>
+                <option value="female">Female</option>
+                <option value="male">Male</option>
+                <option value="other">Other</option>
+                <option value="prefer_not_to_say">Prefer not to say</option>
+              </select>
             </div>
 
             <div class="pt-2 border-t border-[var(--border)]">
@@ -1382,6 +1381,49 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           p_general_consent_version: GENERAL_CONSENT_VERSION,
         }
       }
+
+      // Auto-prefill from existing customer when a known email is entered
+      const emailField = form.elements['email']
+      const statusEl = document.getElementById('prefill-status')
+      let lastLookedUp = ''
+      async function tryPrefill() {
+        const email = (emailField.value || '').trim().toLowerCase()
+        if (!email || !email.includes('@') || email === lastLookedUp) return
+        lastLookedUp = email
+        statusEl.textContent = 'Checking for a previous booking…'
+        statusEl.classList.remove('hidden')
+        try {
+          const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/lookup_customer_by_email`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', apikey: SUPABASE_KEY, Accept: 'application/json' },
+            body: JSON.stringify({ p_email: email })
+          })
+          if (!r.ok) { statusEl.classList.add('hidden'); return }
+          const data = await r.json()
+          if (!data) { statusEl.classList.add('hidden'); return }
+          const setIfEmpty = (name, val) => {
+            const f = form.elements[name]
+            if (f && !f.value && val != null && val !== '') {
+              f.value = val
+              f.classList.remove('invalid')
+            }
+          }
+          setIfEmpty('first_name', data.first_name)
+          setIfEmpty('last_name', data.last_name)
+          setIfEmpty('phone', data.phone)
+          setIfEmpty('date_of_birth', data.date_of_birth)
+          setIfEmpty('gender', data.gender)
+          setIfEmpty('emergency_contact_name', data.emergency_contact_name)
+          setIfEmpty('emergency_contact_phone', data.emergency_contact_phone)
+          setIfEmpty('emergency_contact_relationship', data.emergency_contact_relationship)
+          const name = data.first_name || 'there'
+          statusEl.textContent = `Welcome back, ${name} — your details are pre-filled. Please review and adjust if anything has changed.`
+        } catch {
+          statusEl.classList.add('hidden')
+        }
+      }
+      emailField.addEventListener('blur', tryPrefill)
+      emailField.addEventListener('change', tryPrefill)
 
       // Clear invalid state on any input
       form.addEventListener('input', (e) => {
