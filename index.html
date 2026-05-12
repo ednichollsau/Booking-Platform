@@ -3152,6 +3152,1428 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
 
     function generateSlots(date) {
       const dow = date.getDay()
+      const svc = state.selectedService
+      if (!svc) return []
+      const serviceId = svc.id
+      const durationMin = svc.duration_minutes || 60
+      const intervalMin = svc.slot_interval_minutes || durationMin
+      const capacity = svc.concurrent_capacity || 1
+      const rules = state.availabilityRules.filter(r =>
+        r.day_of_week === dow && (!r.service_id || r.service_id === serviceId)
+      )
+      if (rules.length === 0) return []
+      const slots = []
+      const now = new Date()
+      const slotDurMs = durationMin * 60 * 1000
+      const slotStepMs = intervalMin * 60 * 1000
+      for (const rule of rules) {
+        const [sH, sM] = rule.start_time.split(':').map(Number)
+        const [eH, eM] = rule.end_time.split(':').map(Number)
+        let cur = new Date(date); cur.setHours(sH, sM, 0, 0)
+        const endT = new Date(date); endT.setHours(eH, eM, 0, 0)
+        while (cur < endT) {
+          const slotEnd = new Date(cur.getTime() + slotDurMs)
+          if (slotEnd > endT) break
+          if (cur < now) { cur = new Date(cur.getTime() + slotStepMs); continue }
+          // Count overlapping confirmed bookings; slot is full only at capacity
+          const overlapping = state.bookedSlots.filter(b => {
+            const bs = new Date(b.starts_at), be = new Date(b.ends_at)
+            return cur < be && slotEnd > bs
+          }).length
+          slots.push({ start: new Date(cur), end: slotEnd, booked: overlapping >= capacity })
+          cur = new Date(cur.getTime() + slotStepMs)
+        }
+      }
+      slots.sort((a, b) => a.start - b.start)
+      return slots
+    }
+
+    function getMondayOf(date) {
+      const d = new Date(date)
+      d.setHours(0,0,0,0)
+      const day = d.getDay()
+      const diff = day === 0 ? -6 : 1 - day
+      d.setDate(d.getDate() + diff)
+      return d
+    }
+
+    function getWeekDays(weekStart) {
+      const days = []
+      const todayMidnight = new Date(); todayMidnight.setHours(0,0,0,0)
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(weekStart); d.setDate(d.getDate() + i)
+        const slots = generateSlots(d)
+        const slotCount = slots.filter(s => !s.booked).length
+        days.push({
+          date: d,
+          slotCount,
+          hasAvailability: slotCount > 0,
+          isPast: d < todayMidnight,
+        })
+      }
+      return days
+    }
+
+    function updateAuthStatus() {
+      if (state.authUser) {
+        authStatusEl.innerHTML = `${state.authUser.email} · <a href="#" id="signout-link" class="underline hover:text-[var(--text)]">Sign out</a>`
+        document.getElementById('signout-link')?.addEventListener('click', async (e) => {
+          e.preventDefault()
+          await sb.auth.signOut()
+          state.authUser = null
+          state.customer = null
+          state.customerPackage = null
+          history.length = 0
+          setView('home', false)
+          updateAuthStatus()
+        })
+      } else {
+        authStatusEl.innerHTML = `<a href="#" id="signin-link" class="underline hover:text-[var(--text)]">Have a package? Sign in</a>`
+        document.getElementById('signin-link')?.addEventListener('click', (e) => {
+          e.preventDefault()
+          state.flow = 'returning'
+          setView('auth-request')
+        })
+      }
+    }
+
+    function render() {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      switch (state.view) {
+        case 'home': return renderHome()
+        case 'package-detail': return renderPackageDetail()
+        case 'pick-package-service': return renderPickPackageService()
+        case 'date-select': return renderDateSelect()
+        case 'slot-select': return renderSlotSelect()
+        case 'booking-form': return renderBookingForm()
+        case 'auth-request': return renderAuthRequest()
+        case 'auth-check-email': return renderCheckEmail()
+        case 'onboarding': return renderOnboarding()
+        case 'intake': return renderIntake()
+        case 'success': return renderSuccess()
+        default: return renderHome()
+      }
+    }
+
+    function renderHome() {
+      const hasActivePackage = state.customerPackage && state.customerBalances?.some(b => b.sessions_remaining > 0)
+      const packageBanner = hasActivePackage ? (() => {
+        const p = state.packages.find(x => x.id === state.customerPackage.package_id)
+        const balanceLines = state.customerBalances
+          .filter(b => b.sessions_remaining > 0)
+          .map(b => {
+            const s = state.services.find(x => x.id === b.service_id)
+            return `${b.sessions_remaining} × ${s?.name || ''}`
+          }).join(' · ')
+        return `
+          <div class="card rounded-xl p-5 mb-10 border-l-4" style="border-left-color: var(--accent)">
+            <div class="text-xs font-semibold text-[var(--accent)] uppercase tracking-widest mb-1">Your active package</div>
+            <div class="font-semibold mb-1">${p?.name || ''}</div>
+            <div class="text-sm text-[var(--text-muted)]">${balanceLines}</div>
+            <div class="text-xs text-[var(--text-muted)] mt-2">Click a session below to book using your package.</div>
+          </div>
+        `
+      })() : ''
+      viewEl.innerHTML = `
+        <div class="view">
+          <div class="text-center mb-12">
+            <h1 class="display text-4xl md:text-5xl mb-3">Book a session</h1>
+            <p class="text-[var(--text-muted)] text-lg">Choose a single session or save with a package.</p>
+          </div>
+          ${packageBanner}
+          <div class="mb-12">
+            <h2 class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-4">Single Session</h2>
+            <div class="grid md:grid-cols-2 gap-4">
+              ${state.services.map(s => `
+                <button data-service="${s.id}" class="card card-hover service-btn rounded-xl p-6 text-left">
+                  <div class="flex justify-between items-start mb-2">
+                    <div class="font-semibold text-lg">${s.name}</div>
+                    <div class="display text-2xl">${fmt.money(s.price_pence)}</div>
+                  </div>
+                  <div class="text-sm text-[var(--text-muted)] mb-3">${s.duration_minutes} minutes</div>
+                  <div class="text-sm text-[var(--text-muted)] leading-relaxed">${s.description || ''}</div>
+                </button>
+              `).join('')}
+            </div>
+          </div>
+          <div>
+            <h2 class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-4">Packages</h2>
+            <div class="grid md:grid-cols-3 gap-4">
+              ${state.packages.map(p => {
+                const contents = state.packageContents[p.id] || []
+                const breakdown = contents.map(c => {
+                  const svc = state.services.find(s => s.id === c.service_id)
+                  return `${c.quantity}× ${svc?.name?.replace(' Acupuncture','') || ''}`
+                }).join(' + ')
+                const fullPrice = contents.reduce((sum, c) => {
+                  const svc = state.services.find(s => s.id === c.service_id)
+                  return sum + (svc?.price_pence || 0) * c.quantity
+                }, 0)
+                const savings = fullPrice - p.price_pence
+                return `
+                  <button data-package="${p.id}" class="card card-hover package-btn rounded-xl p-6 text-left">
+                    <div class="font-semibold text-lg mb-1">${p.name.split(' — ')[0]}</div>
+                    <div class="flex items-baseline gap-2 mb-2">
+                      <div class="display text-3xl">${fmt.money(p.price_pence)}</div>
+                      ${savings > 0 ? `<div class="text-xs text-[var(--text-muted)] line-through">${fmt.money(fullPrice)}</div>` : ''}
+                    </div>
+                    <div class="text-sm text-[var(--text-muted)] mb-3">${p.total_sessions} sessions</div>
+                    <div class="text-xs text-[var(--text-muted)]">${breakdown}</div>
+                  </button>
+                `
+              }).join('')}
+            </div>
+          </div>
+        </div>
+      `
+      viewEl.querySelectorAll('.service-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          state.selectedService = state.services.find(s => s.id === btn.dataset.service)
+          state.selectedPackage = null
+          // If the signed-in user has package sessions remaining for this service, use the package
+          const bal = state.customerBalances?.find(b => b.service_id === state.selectedService.id && b.sessions_remaining > 0)
+          if (bal && state.customerPackage) {
+            state.selectedPackage = state.packages.find(p => p.id === state.customerPackage.package_id)
+            state.flow = 'package'
+          } else {
+            state.customerPackage = null
+            state.flow = 'single'
+          }
+          setView('date-select')
+        })
+      })
+      viewEl.querySelectorAll('.package-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          state.selectedPackage = state.packages.find(p => p.id === btn.dataset.package)
+          state.flow = 'package'
+          setView('package-detail')
+        })
+      })
+    }
+
+    function renderPackageDetail() {
+      const p = state.selectedPackage
+      const contents = state.packageContents[p.id] || []
+      const fullPrice = contents.reduce((sum, c) => {
+        const svc = state.services.find(s => s.id === c.service_id)
+        return sum + (svc?.price_pence || 0) * c.quantity
+      }, 0)
+      const savings = fullPrice - p.price_pence
+      viewEl.innerHTML = `
+        <div class="view max-w-2xl mx-auto">
+          <h1 class="display text-4xl mb-2">${p.name}</h1>
+          <p class="text-[var(--text-muted)] mb-8">${p.description || ''}</p>
+          <div class="card rounded-xl p-8 mb-6">
+            <div class="flex items-baseline gap-3 mb-6">
+              <div class="display text-5xl">${fmt.money(p.price_pence)}</div>
+              ${savings > 0 ? `<div class="text-[var(--text-muted)] line-through">${fmt.money(fullPrice)}</div><span class="badge px-2 py-1 rounded text-xs font-semibold">Save ${fmt.money(savings)}</span>` : ''}
+            </div>
+            <div class="space-y-2 mb-6">
+              <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3">Includes</div>
+              ${contents.map(c => {
+                const svc = state.services.find(s => s.id === c.service_id)
+                return `<div class="flex justify-between py-3 border-b border-[var(--border)]"><div><span class="font-semibold">${c.quantity}</span> × ${svc?.name}</div><div class="text-[var(--text-muted)]">${svc?.duration_minutes} min each</div></div>`
+              }).join('')}
+              <div class="flex justify-between pt-3 text-sm text-[var(--text-muted)]"><div>Expires</div><div>12 months from purchase</div></div>
+            </div>
+            <button id="buy-btn" class="btn-primary w-full py-4 rounded-lg font-semibold">Purchase package — ${fmt.money(p.price_pence)}</button>
+            <p class="text-xs text-center text-[var(--text-muted)] mt-3">Secure payment via Stripe. Test mode — use card 4242 4242 4242 4242.</p>
+          </div>
+        </div>
+      `
+      document.getElementById('buy-btn').addEventListener('click', async () => {
+        if (!state.authUser) {
+          persistIntent()
+          setView('auth-request')
+          return
+        }
+        if (!state.customer) { setView('onboarding'); return }
+        await purchasePackageAndContinue()
+      })
+    }
+
+    async function purchasePackageAndContinue() {
+      const p = state.selectedPackage
+      persistIntent()
+      if (!state.accessToken) { alert('Please sign in again.'); setView('auth-request'); return }
+      try {
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/create-checkout-session`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${state.accessToken}`,
+            'apikey': SUPABASE_KEY,
+          },
+          body: JSON.stringify({
+            packageId: p.id,
+            returnUrl: window.location.origin + window.location.pathname,
+          }),
+        })
+        const result = await response.json()
+        if (result.error) throw new Error(result.error)
+        if (!result.url) throw new Error('No checkout URL returned')
+        // Navigate the top window (breaks out of iframe so Stripe loads correctly)
+        ;(window.top || window).location.href = result.url
+      } catch (err) {
+        alert('Payment setup failed: ' + err.message)
+      }
+    }
+
+    async function handleStripeReturn(sessionId) {
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto text-center py-16">
+          <div class="display text-2xl mb-4">Activating your package…</div>
+          <div class="text-[var(--text-muted)]">This usually takes a few seconds.</div>
+          <div class="mt-8 flex justify-center"><div class="animate-pulse text-[var(--primary)]">●●●</div></div>
+        </div>
+      `
+      // Wait for auth to settle
+      const { data: { session: authSession } } = await sb.auth.getSession()
+      if (!authSession) {
+        viewEl.innerHTML = `<div class="view max-w-md mx-auto text-center py-16"><h2 class="display text-2xl mb-3">Please sign in</h2><p class="text-[var(--text-muted)] mb-6">Your payment was successful, but we need you to sign in to view your package.</p><a href="${window.location.pathname}" class="btn-primary inline-block px-6 py-3 rounded-lg">Sign in</a></div>`
+        return
+      }
+      state.authUser = authSession.user
+      updateAuthStatus()
+      await loadCustomer()
+      // Poll for the customer_package created by the webhook
+      let cp = null, attempts = 0
+      while (attempts < 30 && !cp) {
+        const { data } = await sb.from('customer_packages')
+          .select('*').eq('stripe_payment_id', sessionId).maybeSingle()
+        if (data) { cp = data; break }
+        await new Promise(r => setTimeout(r, 500))
+        attempts++
+      }
+      if (!cp) {
+        viewEl.innerHTML = `<div class="view max-w-md mx-auto text-center py-16"><h2 class="display text-2xl mb-3">Almost there</h2><p class="text-[var(--text-muted)] mb-6">Your payment was received but the package is taking longer than expected to activate. Please refresh the page in a moment, or contact us if it doesn't appear.</p><button onclick="window.location.reload()" class="btn-primary px-6 py-3 rounded-lg">Refresh</button></div>`
+        return
+      }
+      state.customerPackage = cp
+      state.selectedPackage = state.packages.find(p => p.id === cp.package_id)
+      restoreIntent()
+      // Clean URL
+      window.history.replaceState({}, '', window.location.pathname)
+      // Continue to next step
+      const contents = state.packageContents[state.selectedPackage.id] || []
+      if (contents.length === 1) {
+        state.selectedService = state.services.find(s => s.id === contents[0].service_id)
+        setView('date-select', false)
+      } else {
+        setView('pick-package-service', false)
+      }
+    }
+
+    function handleStripeCancel() {
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto text-center py-16">
+          <h2 class="display text-2xl mb-3">Payment cancelled</h2>
+          <p class="text-[var(--text-muted)] mb-6">No charge was made. Your booking wasn't completed.</p>
+          <a href="${window.location.pathname}" class="btn-primary inline-block px-6 py-3 rounded-lg">Try again</a>
+        </div>
+      `
+    }
+
+    function renderCancelConfirm(token) {
+      backBtn.classList.add('hidden')
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto text-center py-12">
+          <h1 class="display text-3xl mb-3">Cancel booking?</h1>
+          <p class="text-[var(--text-muted)] mb-8">Click below to cancel your appointment. If it was paid via a package, the session will be returned to your balance.</p>
+          <div class="space-y-3">
+            <button id="cancel-confirm-btn" class="btn-primary w-full py-3 rounded-lg font-semibold">Yes, cancel my booking</button>
+            <button id="cancel-keep-btn" class="btn-secondary w-full py-3 rounded-lg font-semibold">Keep my booking</button>
+          </div>
+          <div id="cancel-result" class="mt-6 text-sm"></div>
+        </div>
+      `
+      document.getElementById('cancel-keep-btn').addEventListener('click', () => {
+        setView('home', false)
+      })
+      document.getElementById('cancel-confirm-btn').addEventListener('click', async () => {
+        const btn = document.getElementById('cancel-confirm-btn')
+        const result = document.getElementById('cancel-result')
+        btn.disabled = true; btn.textContent = 'Cancelling...'
+        try {
+          const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/cancel_booking_by_token`, {
+            method: 'POST',
+            headers: {
+              apikey: SUPABASE_KEY,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ p_token: token })
+          })
+          const data = await r.json()
+          if (data?.ok) {
+            const dt = data.starts_at ? new Date(data.starts_at) : null
+            const dateLine = dt ? `<div class="text-sm text-[var(--text-muted)] mt-2">${fmt.dateLong(dt)} at ${fmt.time(dt)}</div>` : ''
+            const pkgLine = data.session_returned_to_package
+              ? `<div class="text-sm text-[var(--accent)] font-semibold mt-3">Session returned to your package balance.</div>`
+              : ''
+            viewEl.innerHTML = `
+              <div class="view max-w-md mx-auto text-center py-12">
+                <div class="w-14 h-14 mx-auto mb-5 rounded-full bg-[var(--primary)] flex items-center justify-center">
+                  <svg class="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+                </div>
+                <h1 class="display text-3xl mb-3">${data.already_cancelled ? 'Already cancelled' : 'Booking cancelled'}</h1>
+                <p class="text-[var(--text-muted)]">${data.message || ''}</p>
+                ${dateLine}
+                ${pkgLine}
+                <button id="back-home" class="btn-secondary px-6 py-3 rounded-lg mt-8">Book another session</button>
+              </div>
+            `
+            document.getElementById('back-home').addEventListener('click', () => setView('home', false))
+            await loadBookedSlots()
+          } else {
+            result.innerHTML = `<span class="text-red-600">${data?.error || 'Something went wrong.'}</span>`
+            btn.disabled = false; btn.textContent = 'Yes, cancel my booking'
+          }
+        } catch (err) {
+          result.innerHTML = `<span class="text-red-600">Error: ${err.message}</span>`
+          btn.disabled = false; btn.textContent = 'Yes, cancel my booking'
+        }
+      })
+    }
+
+    function handleBookingPaidReturn() {
+      const stashed = sessionStorage.getItem('booking_paid_customer')
+      let info = {}
+      try { info = stashed ? JSON.parse(stashed) : {} } catch {}
+      sessionStorage.removeItem('booking_paid_customer')
+      window.history.replaceState({}, '', window.location.pathname)
+      const slotDate = info.slotStart ? new Date(info.slotStart) : null
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto text-center">
+          <div class="w-16 h-16 mx-auto mb-6 rounded-full bg-[var(--primary)] flex items-center justify-center">
+            <svg class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+          </div>
+          <h1 class="display text-4xl mb-3">Payment received</h1>
+          <p class="text-[var(--text-muted)] mb-8">${info.email ? `Confirmation will be sent to ${info.email}` : 'Confirmation will be sent to your email'}</p>
+          ${info.serviceName && slotDate ? `
+            <div class="card rounded-xl p-6 text-left mb-6">
+              <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Your appointment</div>
+              <div class="font-semibold text-lg mb-1">${info.serviceName}</div>
+              <div class="text-[var(--text-muted)]">${fmt.dateLong(slotDate)} at ${fmt.time(slotDate)}</div>
+              <div class="text-sm text-[var(--accent)] font-semibold mt-3">Paid in full</div>
+            </div>
+          ` : ''}
+          <button id="home-btn" class="btn-secondary px-6 py-3 rounded-lg">Book another session</button>
+        </div>
+      `
+      document.getElementById('home-btn').addEventListener('click', () => {
+        state.selectedService = null; state.selectedPackage = null
+        state.selectedDate = null; state.selectedSlot = null
+        state.flow = null
+        history.length = 0
+        setView('home', false)
+      })
+      // Refresh booked slots in background so the slot now shows as taken
+      loadBookedSlots()
+    }
+
+    function renderPickPackageService() {
+      const contents = state.packageContents[state.selectedPackage.id] || []
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto">
+          <h1 class="display text-3xl mb-2">Which session first?</h1>
+          <p class="text-[var(--text-muted)] mb-8">Your package is purchased. Pick which session type to book first.</p>
+          <div class="space-y-3">
+            ${contents.map(c => {
+              const svc = state.services.find(s => s.id === c.service_id)
+              return `<button data-service="${svc.id}" class="card card-hover service-pick rounded-xl p-5 text-left w-full">
+                <div class="flex justify-between items-center">
+                  <div><div class="font-semibold text-lg">${svc.name}</div><div class="text-sm text-[var(--text-muted)]">${svc.duration_minutes} minutes</div></div>
+                  <div class="text-sm text-[var(--text-muted)]">${c.quantity} remaining</div>
+                </div>
+              </button>`
+            }).join('')}
+          </div>
+        </div>
+      `
+      viewEl.querySelectorAll('.service-pick').forEach(btn => {
+        btn.addEventListener('click', () => {
+          state.selectedService = state.services.find(s => s.id === btn.dataset.service)
+          setView('date-select')
+        })
+      })
+    }
+
+    function renderDateSelect() {
+      // Initialise to current week's Monday on first entry
+      if (!state.weekStart) state.weekStart = getMondayOf(new Date())
+      const days = getWeekDays(state.weekStart)
+      const todayMonday = getMondayOf(new Date())
+      const canGoPrev = state.weekStart > todayMonday
+      const weekEnd = new Date(state.weekStart); weekEnd.setDate(weekEnd.getDate() + 6)
+      const monthsLabel = state.weekStart.getMonth() === weekEnd.getMonth()
+        ? `${state.weekStart.toLocaleDateString('en-GB', { day: 'numeric' })}–${weekEnd.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`
+        : `${state.weekStart.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} – ${weekEnd.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`
+
+      viewEl.innerHTML = `
+        <div class="view">
+          <h1 class="display text-3xl md:text-4xl mb-2">${state.selectedService.name}</h1>
+          <p class="text-[var(--text-muted)] mb-6">Choose a date.</p>
+
+          <div class="flex items-center justify-between gap-2 mb-4">
+            <button id="week-prev" aria-label="Previous week" class="px-3 py-2 rounded-lg shrink-0 ${canGoPrev ? 'btn-secondary cursor-pointer' : 'opacity-30 cursor-not-allowed'}" ${canGoPrev ? '' : 'disabled'}>←<span class="hidden sm:inline ml-1">Previous</span></button>
+            <div class="text-sm font-semibold text-center flex-1">${monthsLabel}</div>
+            <button id="week-next" aria-label="Next week" class="btn-secondary px-3 py-2 rounded-lg shrink-0 cursor-pointer"><span class="hidden sm:inline mr-1">Next</span>→</button>
+          </div>
+
+          <div class="grid grid-cols-7 gap-2 mb-8">
+            ${days.map((d, i) => {
+              const disabled = !d.hasAvailability || d.isPast
+              return `
+                <button data-idx="${i}" class="date-pill rounded-lg p-3 text-center ${disabled ? 'disabled' : ''}" ${disabled ? 'disabled' : ''}>
+                  <div class="text-xs uppercase tracking-wide opacity-70">${d.date.toLocaleDateString('en-GB', { weekday: 'short' })}</div>
+                  <div class="display text-xl my-1">${d.date.getDate()}</div>
+                  <div class="text-xs opacity-70">${d.hasAvailability ? `${d.slotCount} slot${d.slotCount === 1 ? '' : 's'}` : '—'}</div>
+                </button>
+              `
+            }).join('')}
+          </div>
+        </div>
+      `
+
+      const prevBtn = document.getElementById('week-prev')
+      const nextBtn = document.getElementById('week-next')
+      if (prevBtn && !prevBtn.disabled) {
+        prevBtn.addEventListener('click', () => {
+          const newStart = new Date(state.weekStart); newStart.setDate(newStart.getDate() - 7)
+          state.weekStart = newStart < todayMonday ? todayMonday : newStart
+          renderDateSelect()
+        })
+      }
+      nextBtn.addEventListener('click', () => {
+        const newStart = new Date(state.weekStart); newStart.setDate(newStart.getDate() + 7)
+        state.weekStart = newStart
+        renderDateSelect()
+      })
+      viewEl.querySelectorAll('.date-pill').forEach(pill => {
+        if (pill.disabled) return
+        pill.addEventListener('click', () => {
+          state.selectedDate = days[parseInt(pill.dataset.idx)].date
+          setView('slot-select')
+        })
+      })
+    }
+
+    function renderSlotSelect() {
+      const slots = generateSlots(state.selectedDate)
+      viewEl.innerHTML = `
+        <div class="view max-w-2xl mx-auto">
+          <h1 class="display text-3xl mb-2">${fmt.dateLong(state.selectedDate)}</h1>
+          <p class="text-[var(--text-muted)] mb-8">Choose a time.</p>
+          <div class="grid grid-cols-3 sm:grid-cols-4 gap-2">
+            ${slots.length === 0 ? '<p class="text-[var(--text-muted)] col-span-full">No availability on this day.</p>' : ''}
+            ${slots.map((s, i) => `<button data-idx="${i}" class="slot rounded-lg p-3 text-center" ${s.booked ? 'disabled' : ''}><div class="font-semibold">${fmt.time(s.start)}</div>${s.booked ? '<div class="text-xs">Booked</div>' : ''}</button>`).join('')}
+          </div>
+        </div>
+      `
+      viewEl.querySelectorAll('.slot').forEach(btn => {
+        if (btn.disabled) return
+        btn.addEventListener('click', () => {
+          state.selectedSlot = slots[parseInt(btn.dataset.idx)]
+          // Single-session: extended booking form (no email sign-up, but collect full details)
+          if (state.flow === 'single') {
+            setView('booking-form')
+          } else if (!state.authUser) {
+            persistIntent()
+            setView('auth-request')
+          } else if (!state.customer || !state.customer.general_consent_at) {
+            setView('onboarding')
+          } else {
+            setView('intake')
+          }
+        })
+      })
+    }
+
+    function renderAuthRequest() {
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto">
+          <h1 class="display text-3xl mb-2">Sign in to confirm</h1>
+          <p class="text-[var(--text-muted)] mb-6">Enter your email and we'll send you a secure sign-in link. No password required.</p>
+          <form id="email-form" class="space-y-4">
+            <input required name="email" type="email" placeholder="you@example.com" class="input w-full px-4 py-3 rounded-lg" autofocus>
+            <label class="flex items-start gap-2 text-sm text-[var(--text-muted)]">
+              <input required type="checkbox" class="mt-1">
+              <span>I have read and agree to the <a href="https://www.ednicholls.com/privacy-policy" class="underline hover:text-[var(--text)]" target="_blank">privacy policy</a>, and consent to my health information being processed for the purpose of providing my acupuncture treatment.</span>
+            </label>
+            <button id="send-btn" type="submit" class="btn-primary w-full py-4 rounded-lg font-semibold">Send sign-in link</button>
+          </form>
+        </div>
+      `
+      document.getElementById('email-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const btn = document.getElementById('send-btn')
+        btn.disabled = true; btn.textContent = 'Sending...'
+        const email = e.target.email.value
+        try {
+          // Use raw fetch — the JS client's signInWithOtp can hang when auth state is corrupted
+          const r = await fetch(`${SUPABASE_URL}/auth/v1/otp`, {
+            method: 'POST',
+            headers: {
+              apikey: SUPABASE_KEY,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              email,
+              create_user: true,
+              options: { email_redirect_to: window.location.origin + window.location.pathname }
+            })
+          })
+          if (!r.ok) {
+            const err = await r.json().catch(() => ({}))
+            throw new Error(err.msg || err.error_description || `${r.status}`)
+          }
+          sessionStorage.setItem('pending_email', email)
+          setView('auth-check-email', false)
+        } catch (err) {
+          alert('Error: ' + err.message)
+          btn.disabled = false; btn.textContent = 'Send sign-in link'
+        }
+      })
+    }
+
+    function renderCheckEmail() {
+      const email = sessionStorage.getItem('pending_email') || 'your email'
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto">
+          <div class="text-center mb-6">
+            <div class="w-16 h-16 mx-auto mb-4 rounded-full bg-[var(--primary)] flex items-center justify-center">
+              <svg class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8l9 6 9-6M3 8v10a2 2 0 002 2h14a2 2 0 002-2V8M3 8l2-2h14l2 2"/></svg>
+            </div>
+            <h1 class="display text-3xl mb-2">Enter the code</h1>
+            <p class="text-[var(--text-muted)] text-sm mb-1">We've sent a 6-digit code to</p>
+            <p class="font-semibold">${email}</p>
+          </div>
+          <form id="otp-form" class="space-y-4">
+            <input
+              required name="otp" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+              placeholder="123456"
+              autocomplete="one-time-code"
+              class="input w-full px-4 py-4 rounded-lg text-center text-2xl tracking-widest"
+              autofocus
+            >
+            <button id="verify-btn" type="submit" class="btn-primary w-full py-4 rounded-lg font-semibold">Sign in</button>
+            <div id="otp-error" class="hidden text-sm text-center text-red-600"></div>
+          </form>
+          <p class="text-xs text-center text-[var(--text-muted)] mt-6">Didn't get it? Check spam, or <a href="#" id="reset" class="underline">use a different email</a>.</p>
+        </div>
+      `
+      document.getElementById('reset').addEventListener('click', (e) => {
+        e.preventDefault()
+        sessionStorage.removeItem('pending_email')
+        setView('auth-request', false)
+      })
+      document.getElementById('otp-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const btn = document.getElementById('verify-btn')
+        const err = document.getElementById('otp-error')
+        btn.disabled = true; btn.textContent = 'Verifying…'
+        err.classList.add('hidden')
+        const fd = new FormData(e.target)
+        const token = fd.get('otp').toString().trim()
+        const { error } = await sb.auth.verifyOtp({ email, token, type: 'email' })
+        if (error) {
+          err.textContent = error.message
+          err.classList.remove('hidden')
+          btn.disabled = false; btn.textContent = 'Sign in'
+          return
+        }
+        // Success — onAuthStateChange will handle the next view
+      })
+    }
+
+    function renderOnboarding() {
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto">
+          <h1 class="display text-3xl mb-2">Welcome</h1>
+          <p class="text-[var(--text-muted)] mb-8">A few details so I have your contact info.</p>
+          <form id="onboard-form" class="space-y-4">
+            <div class="grid grid-cols-2 gap-3">
+              <div><label class="block text-sm font-semibold mb-1">First name</label><input required name="first_name" class="input w-full px-4 py-3 rounded-lg" type="text"></div>
+              <div><label class="block text-sm font-semibold mb-1">Last name</label><input required name="last_name" class="input w-full px-4 py-3 rounded-lg" type="text"></div>
+            </div>
+            <div><label class="block text-sm font-semibold mb-1">Phone</label><input required name="phone" class="input w-full px-4 py-3 rounded-lg" type="tel"></div>
+            <button id="onboard-btn" type="submit" class="btn-primary w-full py-4 rounded-lg font-semibold">Continue</button>
+          </form>
+        </div>
+      `
+      document.getElementById('onboard-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const btn = document.getElementById('onboard-btn')
+        btn.disabled = true; btn.textContent = 'Saving...'
+        const fd = new FormData(e.target)
+        const data = Object.fromEntries(fd)
+        try {
+          const result = await authedFetch('customers', {
+            method: 'POST',
+            headers: { Prefer: 'return=representation' },
+            body: JSON.stringify({
+              ...data,
+              email: state.authUser.email,
+              auth_user_id: state.authUser.id
+            })
+          })
+          state.customer = Array.isArray(result) ? result[0] : result
+        } catch (err) {
+          alert('Error: ' + err.message)
+          btn.disabled = false; btn.textContent = 'Continue'
+          return
+        }
+        if (state.flow === 'package' && !state.customerPackage) {
+          await purchasePackageAndContinue()
+        } else if (state.selectedSlot) {
+          setView('intake')
+        } else {
+          setView('home', false)
+        }
+      })
+    }
+
+    function renderIntake() {
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto">
+          <h1 class="display text-3xl mb-2">Brief intake</h1>
+          <p class="text-[var(--text-muted)] mb-8">A few quick questions before your session.</p>
+          <div class="card rounded-xl p-4 mb-6">
+            <div class="font-semibold mb-1">${state.selectedService.name}</div>
+            <div class="text-sm text-[var(--text-muted)]">${fmt.dateLong(state.selectedSlot.start)} at ${fmt.time(state.selectedSlot.start)}</div>
+            ${state.customerPackage ? `<div class="text-xs text-[var(--accent)] font-semibold mt-2">Using ${state.selectedPackage?.name || 'your package'}</div>` : ''}
+          </div>
+          <form id="intake-form" class="space-y-4">
+            <div><label class="block text-sm font-semibold mb-1">What brings you in?</label><textarea required name="reason" rows="3" class="input w-full px-4 py-3 rounded-lg"></textarea></div>
+            <div><label class="block text-sm font-semibold mb-1">Any current medications?</label><textarea name="medications" rows="2" class="input w-full px-4 py-3 rounded-lg"></textarea></div>
+            <div><label class="block text-sm font-semibold mb-1">Any current health conditions?</label><textarea name="conditions" rows="2" class="input w-full px-4 py-3 rounded-lg"></textarea></div>
+            <button id="confirm-btn" type="submit" class="btn-primary w-full py-4 rounded-lg font-semibold">Confirm booking</button>
+          </form>
+        </div>
+      `
+      document.getElementById('intake-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const btn = document.getElementById('confirm-btn')
+        btn.disabled = true; btn.textContent = 'Booking...'
+        const fd = new FormData(e.target)
+        const intake = Object.fromEntries(fd)
+        const booking = {
+          customer_id: state.customer.id,
+          service_id: state.selectedService.id,
+          customer_package_id: state.customerPackage?.id || null,
+          starts_at: state.selectedSlot.start.toISOString(),
+          ends_at: state.selectedSlot.end.toISOString(),
+          intake_response: intake,
+          status: 'confirmed'
+        }
+        try {
+          await authedFetch('bookings', { method: 'POST', body: JSON.stringify(booking) })
+        } catch (err) {
+          alert('Error: ' + err.message)
+          btn.disabled = false; btn.textContent = 'Confirm booking'
+          return
+        }
+        if (state.customerPackage) {
+          try {
+            const bals = await authedFetch(`customer_package_balances?select=*&customer_package_id=eq.${state.customerPackage.id}&service_id=eq.${state.selectedService.id}`)
+            const bal = bals && bals[0]
+            if (bal && bal.sessions_remaining > 0) {
+              await authedFetch(`customer_package_balances?id=eq.${bal.id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ sessions_remaining: bal.sessions_remaining - 1 })
+              })
+            }
+          } catch {}
+        }
+        await loadBookedSlots()
+        clearIntent()
+        setView('success', false)
+      })
+    }
+
+    function renderBookingForm() {
+      const s = state.selectedService
+      const slot = state.selectedSlot
+      const consentHtml = GENERAL_CONSENT_TEXT.split('\n\n').map(p => `<p class="mb-2">${p.trim()}</p>`).join('')
+      viewEl.innerHTML = `
+        <div class="view max-w-2xl mx-auto">
+          <h1 class="display text-3xl mb-2">Confirm your booking</h1>
+          <p class="text-[var(--text-muted)] mb-6">A few details so I have your contact info and can prepare for our session.</p>
+
+          <div class="card rounded-xl p-4 mb-6">
+            <div class="font-semibold mb-1">${s.name}</div>
+            <div class="text-sm text-[var(--text-muted)]">${fmt.dateLong(slot.start)} at ${fmt.time(slot.start)}</div>
+            <div class="text-sm text-[var(--text-muted)] mt-1">${fmt.money(s.price_pence)} · ${s.duration_minutes} min</div>
+          </div>
+
+          <form id="booking-form" class="space-y-4">
+            <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Your details</div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-semibold mb-1">First name</label>
+                <input required name="first_name" class="input w-full px-4 py-3 rounded-lg" type="text">
+              </div>
+              <div>
+                <label class="block text-sm font-semibold mb-1">Last name</label>
+                <input required name="last_name" class="input w-full px-4 py-3 rounded-lg" type="text">
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-semibold mb-1">Email</label>
+                <input required name="email" class="input w-full px-4 py-3 rounded-lg" type="email">
+              </div>
+              <div>
+                <label class="block text-sm font-semibold mb-1">Phone</label>
+                <input required name="phone" class="input w-full px-4 py-3 rounded-lg" type="tel">
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm font-semibold mb-1">Date of birth</label>
+                <input required name="date_of_birth" class="input w-full px-4 py-3 rounded-lg" type="date">
+              </div>
+              <div>
+                <label class="block text-sm font-semibold mb-1">Gender</label>
+                <select required name="gender" class="input w-full px-4 py-3 rounded-lg">
+                  <option value="">Select…</option>
+                  <option value="female">Female</option>
+                  <option value="male">Male</option>
+                  <option value="other">Other</option>
+                  <option value="prefer_not_to_say">Prefer not to say</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm font-semibold mb-1">Address</label>
+              <input required name="address" class="input w-full px-4 py-3 rounded-lg" type="text" placeholder="Street, city, postcode">
+            </div>
+
+            <div class="pt-2 border-t border-[var(--border)]">
+              <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3 mt-3">Emergency contact</div>
+              <div class="space-y-3">
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="block text-sm font-semibold mb-1">Name</label>
+                    <input required name="emergency_contact_name" class="input w-full px-4 py-3 rounded-lg" type="text">
+                  </div>
+                  <div>
+                    <label class="block text-sm font-semibold mb-1">Phone</label>
+                    <input required name="emergency_contact_phone" class="input w-full px-4 py-3 rounded-lg" type="tel">
+                  </div>
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-1">Relationship</label>
+                  <input required name="emergency_contact_relationship" class="input w-full px-4 py-3 rounded-lg" type="text" placeholder="e.g. partner, parent, friend">
+                </div>
+              </div>
+            </div>
+
+            <div class="pt-2 border-t border-[var(--border)]">
+              <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3 mt-3">Brief intake</div>
+              <div class="space-y-3">
+                <div>
+                  <label class="block text-sm font-semibold mb-1">What brings you in?</label>
+                  <textarea required name="reason" rows="3" class="input w-full px-4 py-3 rounded-lg"></textarea>
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-1">Any current medications?</label>
+                  <textarea name="medications" rows="2" class="input w-full px-4 py-3 rounded-lg"></textarea>
+                </div>
+                <div>
+                  <label class="block text-sm font-semibold mb-1">Any current health conditions?</label>
+                  <textarea name="conditions" rows="2" class="input w-full px-4 py-3 rounded-lg"></textarea>
+                </div>
+              </div>
+            </div>
+
+            <div class="pt-2 border-t border-[var(--border)]">
+              <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3 mt-3">Consent to treatment</div>
+              <div class="card rounded-lg p-4 bg-[var(--bg)] max-h-48 overflow-y-auto text-sm leading-relaxed text-[var(--text-muted)]">${consentHtml}</div>
+              <label class="flex items-start gap-2 text-sm pt-3">
+                <input required type="checkbox" name="general_consent" class="mt-1">
+                <span>I have read and consent to the terms above.</span>
+              </label>
+              <div class="pt-3">
+                <div class="text-sm font-semibold mb-2">Electro-acupuncture</div>
+                <div class="flex flex-col gap-2 text-sm">
+                  <label class="flex items-start gap-2"><input required type="radio" name="electro_consent" value="agree" class="mt-1"><span>I consent to electro-acupuncture if offered as part of treatment.</span></label>
+                  <label class="flex items-start gap-2"><input required type="radio" name="electro_consent" value="refuse" class="mt-1"><span>I do not consent to electro-acupuncture.</span></label>
+                </div>
+              </div>
+            </div>
+
+            <label class="flex items-start gap-2 text-sm text-[var(--text-muted)] pt-2">
+              <input required type="checkbox" name="privacy_consent" class="mt-1">
+              <span>I have read and agree to the <a href="https://www.ednicholls.com/privacy-policy" target="_blank" class="underline hover:text-[var(--text)]">privacy policy</a>, and consent to my health information being processed for the purpose of providing my acupuncture treatment.</span>
+            </label>
+
+            <div class="pt-2 space-y-2">
+              <button id="pay-online-btn" type="button" class="btn-primary w-full py-4 rounded-lg font-semibold">Pay ${fmt.money(s.price_pence)} now</button>
+              <button id="pay-clinic-btn" type="button" class="btn-secondary w-full py-4 rounded-lg font-semibold">Reserve — pay at clinic</button>
+            </div>
+          </form>
+        </div>
+      `
+      const form = document.getElementById('booking-form')
+      const onlineBtn = document.getElementById('pay-online-btn')
+      const clinicBtn = document.getElementById('pay-clinic-btn')
+
+      function getFormData() {
+        if (!form.checkValidity()) { form.reportValidity(); return null }
+        const fd = new FormData(form)
+        return {
+          first_name: fd.get('first_name'),
+          last_name: fd.get('last_name'),
+          email: fd.get('email'),
+          phone: fd.get('phone'),
+          date_of_birth: fd.get('date_of_birth'),
+          gender: fd.get('gender'),
+          address: fd.get('address'),
+          emergency_contact_name: fd.get('emergency_contact_name'),
+          emergency_contact_phone: fd.get('emergency_contact_phone'),
+          emergency_contact_relationship: fd.get('emergency_contact_relationship'),
+          reason: fd.get('reason'),
+          medications: fd.get('medications'),
+          conditions: fd.get('conditions'),
+          electro_consent: fd.get('electro_consent') === 'agree',
+        }
+      }
+
+      function rpcArgsFromData(data) {
+        return {
+          p_email: data.email,
+          p_first_name: data.first_name,
+          p_last_name: data.last_name,
+          p_phone: data.phone,
+          p_date_of_birth: data.date_of_birth,
+          p_gender: data.gender,
+          p_address: data.address,
+          p_emergency_contact_name: data.emergency_contact_name,
+          p_emergency_contact_phone: data.emergency_contact_phone,
+          p_emergency_contact_relationship: data.emergency_contact_relationship,
+          p_service_id: state.selectedService.id,
+          p_starts_at: state.selectedSlot.start.toISOString(),
+          p_ends_at: state.selectedSlot.end.toISOString(),
+          p_intake_response: {
+            reason: data.reason,
+            medications: data.medications,
+            conditions: data.conditions,
+          },
+          p_electro_acupuncture_consent: data.electro_consent,
+          p_general_consent_version: '${GENERAL_CONSENT_VERSION}'.replace(/['"$]/g, ''),
+        }
+      }
+
+      // PAY AT CLINIC: insert booking + customer via RPC
+      clinicBtn.addEventListener('click', async () => {
+        const data = getFormData(); if (!data) return
+        clinicBtn.disabled = true; onlineBtn.disabled = true
+        clinicBtn.textContent = 'Booking...'
+        try {
+          const args = rpcArgsFromData(data)
+          args.p_general_consent_version = GENERAL_CONSENT_VERSION
+          await authedFetch('rpc/create_anonymous_booking', {
+            method: 'POST',
+            body: JSON.stringify(args),
+          })
+          state.customer = { email: data.email, first_name: data.first_name, last_name: data.last_name }
+          await loadBookedSlots()
+          setView('success', false)
+        } catch (err) {
+          alert('Error: ' + err.message)
+          clinicBtn.disabled = false; onlineBtn.disabled = false
+          clinicBtn.textContent = 'Reserve — pay at clinic'
+        }
+      })
+
+      // PAY ONLINE: stash booking + redirect to Stripe Checkout
+      onlineBtn.addEventListener('click', async () => {
+        const data = getFormData(); if (!data) return
+        onlineBtn.disabled = true; clinicBtn.disabled = true
+        onlineBtn.textContent = 'Redirecting...'
+        sessionStorage.setItem('booking_paid_customer', JSON.stringify({
+          email: data.email, first_name: data.first_name, last_name: data.last_name,
+          serviceName: state.selectedService.name,
+          slotStart: state.selectedSlot.start.toISOString()
+        }))
+        try {
+          const r = await fetch(`${SUPABASE_URL}/functions/v1/create-checkout-session`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: SUPABASE_KEY,
+            },
+            body: JSON.stringify({
+              booking: {
+                ...data,
+                service_id: state.selectedService.id,
+                starts_at: state.selectedSlot.start.toISOString(),
+                ends_at: state.selectedSlot.end.toISOString(),
+                general_consent_version: GENERAL_CONSENT_VERSION,
+              },
+              returnUrl: window.location.origin + window.location.pathname,
+            })
+          })
+          const result = await r.json()
+          if (!result.url) throw new Error(result.error || 'No checkout URL')
+          ;(window.top || window).location.href = result.url
+        } catch (err) {
+          alert('Payment setup failed: ' + err.message)
+          onlineBtn.disabled = false; clinicBtn.disabled = false
+          onlineBtn.textContent = `Pay ${fmt.money(state.selectedService.price_pence)} now`
+        }
+      })
+    }
+
+    function renderSuccess() {
+      viewEl.innerHTML = `
+        <div class="view max-w-md mx-auto text-center">
+          <div class="w-16 h-16 mx-auto mb-6 rounded-full bg-[var(--primary)] flex items-center justify-center">
+            <svg class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+          </div>
+          <h1 class="display text-4xl mb-3">You're booked</h1>
+          <p class="text-[var(--text-muted)] mb-8">Confirmation sent to ${state.customer.email}</p>
+          <div class="card rounded-xl p-6 text-left mb-6">
+            <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Your appointment</div>
+            <div class="font-semibold text-lg mb-1">${state.selectedService.name}</div>
+            <div class="text-[var(--text-muted)]">${fmt.dateLong(state.selectedSlot.start)} at ${fmt.time(state.selectedSlot.start)}</div>
+            ${state.customerPackage ? `<div class="text-sm text-[var(--accent)] font-semibold mt-3">1 session used from your package</div>` : ''}
+          </div>
+          <button id="home-btn" class="btn-secondary px-6 py-3 rounded-lg">Book another session</button>
+        </div>
+      `
+      document.getElementById('home-btn').addEventListener('click', () => {
+        state.selectedService = null; state.selectedPackage = null
+        state.selectedDate = null; state.selectedSlot = null
+        state.flow = null
+        // Keep customer/customerPackage - they're persistent
+        history.length = 0
+        setView('home', false)
+      })
+    }
+
+    // ============================================================
+    // AUTH HANDLING
+    // ============================================================
+
+    sb.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') {
+        if (session?.user) {
+          state.authUser = session.user
+          state.accessToken = session.access_token
+          updateAuthStatus()
+          // Link any pre-existing anonymous customer record to this auth user
+          try {
+            await fetch(`${SUPABASE_URL}/rest/v1/rpc/link_customer_to_auth`, {
+              method: 'POST',
+              headers: {
+                apikey: SUPABASE_KEY,
+                Authorization: `Bearer ${state.accessToken}`,
+                'Content-Type': 'application/json'
+              },
+              body: '{}'
+            })
+          } catch {}
+          await loadCustomer()
+          // If returning from magic link with stored intent, restore and continue
+          const restored = restoreIntent()
+          if (restored) {
+            if (!state.customer) {
+              setView('onboarding', false)
+            } else if (state.flow === 'package' && !state.customerPackage) {
+              setView('package-detail', false)
+            } else if (state.selectedSlot) {
+              setView('intake', false)
+            } else if (state.selectedService) {
+              setView('date-select', false)
+            } else {
+              setView('home', false)
+            }
+            history.length = 0
+          } else if (['auth-request','auth-check-email'].includes(state.view)) {
+            // Returning customer signed in without a pending booking — show home with their package
+            history.length = 0
+            setView('home', false)
+          }
+        }
+      }
+      if (event === 'SIGNED_OUT') {
+        state.authUser = null
+        state.accessToken = null
+        state.customer = null
+        state.customerPackage = null
+        state.customerBalances = []
+        clearIntent()
+        updateAuthStatus()
+      }
+    })
+
+    // ============================================================
+    // IFRAME EMBED SUPPORT
+    // Measure actual content height (not body, which has min-h-screen)
+    // and post it to the parent. Debounced + last-value-only to avoid
+    // feedback loops where parent → iframe height growth → reports new
+    // height → parent grows → infinite scroll.
+    // ============================================================
+    let lastReportedHeight = 0
+    let heightTimer = null
+    function notifyParentHeight() {
+      if (window.parent === window) return
+      // Measure actual rendered content rather than body.scrollHeight
+      const app = document.getElementById('app')
+      if (!app) return
+      const h = app.getBoundingClientRect().height
+      const rounded = Math.ceil(h)
+      // Only post if changed by more than a pixel — avoids noise
+      if (Math.abs(rounded - lastReportedHeight) < 2) return
+      lastReportedHeight = rounded
+      window.parent.postMessage({ type: 'ed-booking-height', height: rounded }, '*')
+    }
+    function scheduleNotify() {
+      clearTimeout(heightTimer)
+      heightTimer = setTimeout(notifyParentHeight, 80)
+    }
+    const inIframe = window.parent !== window
+    if (inIframe) {
+      document.body.classList.add('in-iframe')
+      const ro = new ResizeObserver(scheduleNotify)
+      const appEl = document.getElementById('app')
+      if (appEl) ro.observe(appEl)
+      window.addEventListener('load', scheduleNotify)
+    }
+
+    async function init() {
+      // ===== HANDLE URL-DRIVEN ENTRY POINTS FIRST =====
+      // Don't depend on data loading or auth — these stand alone.
+      const params = new URLSearchParams(window.location.search)
+      const cancelToken = params.get('cancel')
+      if (cancelToken) {
+        window.history.replaceState({}, '', window.location.pathname)
+        // Don't need any data — render directly
+        renderCancelConfirm(cancelToken)
+        return
+      }
+      if (params.get('stripe_cancel') === '1') {
+        window.history.replaceState({}, '', window.location.pathname)
+        handleStripeCancel()
+        return
+      }
+      if (params.get('stripe_success') === '1') {
+        const type = params.get('type') || 'package'
+        if (type === 'booking') {
+          // Booking-paid return doesn't need data preloaded — show success view immediately
+          handleBookingPaidReturn()
+          return
+        }
+        // Package-paid return needs auth state restored, fall through to load
+      }
+
+      // ===== NORMAL DATA LOAD =====
+      viewEl.innerHTML = `<div class="space-y-6"><div class="skeleton h-12 w-2/3 mx-auto"></div><div class="grid md:grid-cols-2 gap-4"><div class="skeleton h-32"></div><div class="skeleton h-32"></div></div><div class="grid md:grid-cols-3 gap-4"><div class="skeleton h-40"></div><div class="skeleton h-40"></div><div class="skeleton h-40"></div></div></div>`
+      try {
+        await loadInitialData()
+        await loadBookedSlots()
+        const session = await Promise.race([
+          sb.auth.getSession().then(r => r.data?.session).catch(() => null),
+          new Promise(resolve => setTimeout(() => resolve(null), 2000))
+        ])
+        if (session?.user) {
+          state.authUser = session.user
+          state.accessToken = session.access_token
+          try { await Promise.race([
+            loadCustomer(),
+            new Promise(resolve => setTimeout(resolve, 3000))
+          ]) } catch {}
+        }
+        updateAuthStatus()
+        // Package-paid return: handle now that auth is loaded
+        if (params.get('stripe_success') === '1' && (params.get('type') || 'package') === 'package') {
+          await handleStripeReturn(params.get('session_id'))
+          return
+        }
+        render()
+      } catch (err) {
+        viewEl.innerHTML = `<div class="text-center text-red-600">Failed to load: ${err.message}</div>`
+      }
+    }
+    init()
+  </script>
+</body>
+</html>    body { background: var(--bg); color: var(--text); font-family: 'Raleway', -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }
+    body.in-iframe { background: transparent; }
+    .display { font-family: 'Marisa', Georgia, serif; font-weight: 500; letter-spacing: -0.02em; }
+    /* Section card wrapper - rounded corners, cream surface */
+    .section-card {
+      background: var(--bg);
+      border-radius: 24px;
+      overflow: hidden;
+    }
+    .section-topbar {
+      background: #4D5D53;
+      color: #FDFAF6;
+      padding: 22px 28px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 1rem;
+    }
+    .section-topbar button,
+    .section-topbar a,
+    .section-topbar #auth-status {
+      color: #FDFAF6 !important;
+      font-size: 1rem;
+    }
+    .section-topbar a:hover,
+    .section-topbar button:hover {
+      opacity: 0.75;
+    }
+    .section-content {
+      padding: 40px 32px;
+    }
+    @media (min-width: 768px) {
+      .section-topbar { padding: 26px 40px; font-size: 1.0625rem; }
+      .section-topbar button,
+      .section-topbar a,
+      .section-topbar #auth-status { font-size: 1.0625rem; }
+      .section-content { padding: 56px 48px; }
+    }
+    .view { animation: fadeIn 0.25s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .btn-primary { background: var(--primary); color: white; transition: all 0.15s ease; }
+    .btn-primary:hover { background: var(--primary-dark); transform: translateY(-1px); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .btn-secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); transition: all 0.15s ease; }
+    .btn-secondary:hover { border-color: var(--primary); }
+    .card { background: var(--surface); border: 1px solid var(--border); transition: all 0.15s ease; }
+    .card-hover:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.04); }
+    .date-pill { transition: all 0.15s ease; background: var(--surface); border: 1px solid var(--border); cursor: pointer; }
+    .date-pill:hover:not(.disabled) { border-color: var(--primary); }
+    .date-pill.disabled { opacity: 0.3; cursor: not-allowed; }
+    .slot { transition: all 0.15s ease; background: var(--surface); border: 1px solid var(--border); cursor: pointer; }
+    .slot:hover:not(:disabled) { border-color: var(--primary); background: rgba(92,122,110,0.04); }
+    .slot:disabled { opacity: 0.4; cursor: not-allowed; }
+    .input { background: var(--surface); border: 1px solid var(--border); transition: all 0.15s ease; font-family: inherit; font-size: 1rem; }
+    .input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(92,122,110,0.1); }
+    .badge { background: rgba(200,149,109,0.12); color: var(--accent); }
+    @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+    .skeleton { background: linear-gradient(90deg, #f0ece5 25%, #f8f5ee 50%, #f0ece5 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="max-w-5xl mx-auto px-4 md:px-6 pt-4 md:pt-6 pb-6">
+      <section class="section-card">
+        <div class="section-topbar">
+          <button id="back-btn" class="hidden">← Back</button>
+          <div class="flex-1"></div>
+          <div id="auth-status"></div>
+        </div>
+        <div class="section-content">
+          <div id="view"></div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script type="module">
+    import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.7'
+
+    const SUPABASE_URL = 'https://bdzasnbzyfkqojqqucil.supabase.co'
+    const SUPABASE_KEY = 'sb_publishable_XOH_-PTfkNsPhwY5eMV_Tg_M9GPbWE5'
+    const STRIPE_PUBLISHABLE_KEY = 'pk_test_51SY2F7RwdSqO1UREvGhx9E7bGQb0qF29zbqW9QZ6bLlREzHPZ0kcloIfqVVY30aSyBFjXq2XOeMKeJFaq6lstsat006cFJHzxr'
+
+    const GENERAL_CONSENT_VERSION = '2026-05-07'
+    const GENERAL_CONSENT_TEXT = `By agreeing to the terms detailed below, I willingly consent to acupuncture treatment administered by a licensed acupuncturist. I comprehend that acupuncture involves the insertion of single-use sterile needles through the skin to normalize physiological functions. I acknowledge the general safety of acupuncture but understand that potential side effects may include local bruising, minor bleeding, dizziness, fainting, pain or discomfort, and the possible exacerbation of existing symptoms. No guarantees are provided regarding its effectiveness, and I retain the right to discontinue treatment at any point.
+
+If I am pregnant or attempting to become pregnant, I will promptly inform the acupuncturist to avoid points that could induce miscarriage. Treatment during pregnancy necessitates clearance from my obstetrician.
+
+Separately, I may be offered electro-acupuncture as part of the treatment, and I understand that potential adverse effects may include mild electrical shock, pain, discomfort, and the potential worsening of pre-existing symptoms. I have the right to refuse this treatment.
+
+I recognize that acupuncture is not an exact science, and no assurances or guarantees have been made regarding treatment outcomes. I have carefully read and understood this consent form, had the opportunity to ask questions, and may seek a more detailed explanation from my practitioner if needed.
+
+I am aware of the importance of consulting with a licensed physician regarding my condition before or at any time during my acupuncture treatment.
+
+By confirming below, I affirm my voluntary consent and understanding of the entire course of treatment for both my present and any future conditions.`
+    const sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
+      auth: { detectSessionInUrl: true, flowType: 'implicit', persistSession: true }
+    })
+
+    const STORAGE_KEY = 'ed_booking_intent_v1'
+
+    const state = {
+      view: 'home',
+      services: [], packages: [], packageContents: {},
+      selectedService: null, selectedPackage: null,
+      selectedDate: null, selectedSlot: null,
+      flow: null, customer: null, customerPackage: null,
+      bookedSlots: [], availabilityRules: [],
+      authUser: null, accessToken: null, authPending: false,
+      customerBalances: []
+    }
+
+    // Authed fetch helper that bypasses the Supabase JS client
+    async function authedFetch(path, options = {}) {
+      const headers = {
+        apikey: SUPABASE_KEY,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(options.headers || {})
+      }
+      if (state.accessToken) headers.Authorization = `Bearer ${state.accessToken}`
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { ...options, headers })
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '')
+        throw new Error(`${r.status} ${txt}`)
+      }
+      const text = await r.text()
+      return text ? JSON.parse(text) : null
+    }
+
+    const viewEl = document.getElementById('view')
+    const backBtn = document.getElementById('back-btn')
+    const authStatusEl = document.getElementById('auth-status')
+    const history = []
+
+    // Logical "parent" view for each screen — used when history is empty (e.g. after auth redirect)
+    const PARENT_VIEW = {
+      'package-detail': 'home',
+      'pick-package-service': 'home',
+      'date-select': 'home',
+      'slot-select': 'date-select',
+      'auth-request': 'home',
+      'auth-check-email': 'auth-request',
+      'onboarding': 'home',
+      'booking-form': 'slot-select',
+      'intake': 'slot-select',
+      'success': 'home'
+    }
+
+    function updateNavVisibility(name) {
+      const isLanding = name === 'home' || name === 'success'
+      backBtn.classList.toggle('hidden', isLanding)
+    }
+
+    function setView(name, push = true) {
+      if (push && state.view !== name) history.push(state.view)
+      state.view = name
+      updateNavVisibility(name)
+      render()
+      // Scroll to top — both inside the iframe and the parent window
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      if (window.parent !== window) {
+        window.parent.postMessage({ type: 'ed-booking-scroll-top' }, '*')
+      }
+    }
+
+    backBtn.addEventListener('click', () => {
+      if (history.length > 0) {
+        state.view = history.pop()
+      } else {
+        state.view = PARENT_VIEW[state.view] || 'home'
+      }
+      updateNavVisibility(state.view)
+      render()
+    })
+
+    function persistIntent() {
+      const intent = {
+        flow: state.flow,
+        selectedServiceId: state.selectedService?.id || null,
+        selectedPackageId: state.selectedPackage?.id || null,
+        selectedSlotStart: state.selectedSlot?.start?.toISOString() || null,
+        selectedSlotEnd: state.selectedSlot?.end?.toISOString() || null
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(intent))
+    }
+    function restoreIntent() {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (!raw) return false
+      try {
+        const i = JSON.parse(raw)
+        state.flow = i.flow
+        state.selectedService = state.services.find(s => s.id === i.selectedServiceId) || null
+        state.selectedPackage = state.packages.find(p => p.id === i.selectedPackageId) || null
+        if (i.selectedSlotStart && i.selectedSlotEnd) {
+          state.selectedSlot = { start: new Date(i.selectedSlotStart), end: new Date(i.selectedSlotEnd), booked: false }
+        }
+        return true
+      } catch { return false }
+    }
+    function clearIntent() { localStorage.removeItem(STORAGE_KEY) }
+
+    // Raw-fetch helper that bypasses the Supabase JS client (which can hang on auth init)
+    async function rawFetch(path) {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+        headers: { apikey: SUPABASE_KEY, Accept: 'application/json' }
+      })
+      if (!r.ok) throw new Error(`Fetch ${path} failed: ${r.status}`)
+      return r.json()
+    }
+
+    async function loadInitialData() {
+      const [services, packages, contents, rules] = await Promise.all([
+        rawFetch('services?select=*&active=eq.true&order=price_pence'),
+        rawFetch('packages?select=*&active=eq.true&order=price_pence'),
+        rawFetch('package_contents?select=*'),
+        rawFetch('availability_rules?select=*'),
+      ])
+      state.services = services || []
+      state.packages = packages || []
+      state.availabilityRules = rules || []
+      state.packageContents = {}
+      for (const pc of (contents || [])) {
+        if (!state.packageContents[pc.package_id]) state.packageContents[pc.package_id] = []
+        state.packageContents[pc.package_id].push(pc)
+      }
+    }
+
+    async function loadBookedSlots() {
+      const start = new Date(); start.setHours(0,0,0,0)
+      const end = new Date(start); end.setDate(end.getDate() + 60)
+      const path = `booked_slots?select=*&starts_at=gte.${encodeURIComponent(start.toISOString())}&starts_at=lt.${encodeURIComponent(end.toISOString())}`
+      try {
+        state.bookedSlots = await rawFetch(path) || []
+      } catch { state.bookedSlots = [] }
+    }
+
+    async function loadCustomer() {
+      if (!state.authUser) return
+      try {
+        const rows = await authedFetch(`customers?select=*&auth_user_id=eq.${state.authUser.id}`)
+        state.customer = (rows && rows[0]) || null
+      } catch { state.customer = null }
+      state.customerBalances = []
+      state.customerPackage = null
+      if (state.customer) {
+        try {
+          const cps = await authedFetch(`customer_packages?select=*&customer_id=eq.${state.customer.id}&status=eq.active&order=purchased_at.desc`)
+          state.customerPackage = (cps && cps[0]) || null
+        } catch {}
+        if (state.customerPackage) {
+          try {
+            state.customerBalances = await authedFetch(`customer_package_balances?select=*&customer_package_id=eq.${state.customerPackage.id}`) || []
+          } catch { state.customerBalances = [] }
+        }
+      }
+    }
+
+    sb.channel('bookings-changes')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'bookings' }, () => {
+        loadBookedSlots().then(() => {
+          if (['date-select','slot-select'].includes(state.view)) render()
+        })
+      })
+      .subscribe()
+
+    const fmt = {
+      money: p => '£' + (p/100).toFixed(0),
+      time: d => d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+      dateLong: d => d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
+    }
+
+    function generateSlots(date) {
+      const dow = date.getDay()
       const serviceId = state.selectedService?.id
       const durationMin = state.selectedService?.duration_minutes || 60
       // Rules apply if either service_id matches OR service_id is null (any service)
