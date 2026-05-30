@@ -686,27 +686,37 @@
               <label class="block text-sm font-semibold mb-1">Patient</label>
               <select id="newbk-patient" class="input w-full px-4 py-2 rounded-lg">
                 <option value="new">+ New patient</option>
-                ${state.customers.length > 0 ? `<optgroup label="Existing patients">${state.customers.map(c => `<option value="${c.id}">${c.first_name || ''} ${c.last_name || ''} — ${c.email}</option>`).join('')}</optgroup>` : ''}
+                ${state.customers.length > 0 ? `<optgroup label="Existing patients">${state.customers.map(c => {
+                  const name = `${c.first_name || ''} ${c.last_name || ''}`.trim() || '(no name)'
+                  // Hide placeholder emails for walk-ins — show the phone instead
+                  const contact = c.email && c.email.endsWith('@noemail.local')
+                    ? (c.phone || '(no contact)')
+                    : c.email
+                  return `<option value="${c.id}">${name} — ${contact}</option>`
+                }).join('')}</optgroup>` : ''}
               </select>
-            </div>
-            <div>
-              <label class="block text-sm font-semibold mb-1">Email</label>
-              <input required name="email" type="email" placeholder="patient@example.com" class="input w-full px-4 py-2 rounded-lg">
             </div>
             <div class="grid grid-cols-2 gap-2">
               <div>
-                <label class="block text-sm font-semibold mb-1">First name</label>
+                <label class="block text-sm font-semibold mb-1">First name *</label>
                 <input required name="first_name" class="input w-full px-4 py-2 rounded-lg" type="text">
               </div>
               <div>
                 <label class="block text-sm font-semibold mb-1">Last name</label>
-                <input required name="last_name" class="input w-full px-4 py-2 rounded-lg" type="text">
+                <input name="last_name" class="input w-full px-4 py-2 rounded-lg" type="text">
               </div>
             </div>
-            <div>
-              <label class="block text-sm font-semibold mb-1">Phone</label>
-              <input name="phone" class="input w-full px-4 py-2 rounded-lg" type="tel">
+            <div class="grid grid-cols-2 gap-2">
+              <div>
+                <label class="block text-sm font-semibold mb-1">Email</label>
+                <input name="email" type="email" placeholder="patient@example.com" class="input w-full px-4 py-2 rounded-lg">
+              </div>
+              <div>
+                <label class="block text-sm font-semibold mb-1">Phone</label>
+                <input name="phone" class="input w-full px-4 py-2 rounded-lg" type="tel">
+              </div>
             </div>
+            <p class="text-xs text-[var(--text-muted)] -mt-1">Provide at least one of email or phone.</p>
             <div>
               <label class="block text-sm font-semibold mb-1">Service</label>
               <select required name="service_id" id="newbk-service" class="input w-full px-4 py-2 rounded-lg">
@@ -809,7 +819,22 @@
         const errEl = document.getElementById('newbk-error')
         errEl.classList.add('hidden')
         const fd = new FormData(form)
-        const email = (fd.get('email') || '').toString().toLowerCase().trim()
+        let email = (fd.get('email') || '').toString().toLowerCase().trim()
+        const phone = (fd.get('phone') || '').toString().trim()
+        const firstName = (fd.get('first_name') || '').toString().trim()
+        if (!firstName) {
+          errEl.textContent = 'First name is required.'; errEl.classList.remove('hidden'); return
+        }
+        if (!email && !phone) {
+          errEl.textContent = 'Please provide at least one of email or phone.'
+          errEl.classList.remove('hidden'); return
+        }
+        // Walk-in with no email — generate a placeholder so the customers row
+        // has a unique value. Looks like walkin+447700900123@noemail.local
+        if (!email) {
+          const phoneKey = phone.replace(/[^\d]/g, '') || Date.now().toString()
+          email = `walkin+${phoneKey}@noemail.local`
+        }
         const service = state.services.find(s => s.id === fd.get('service_id'))
         if (!service) return
         const startsAt = new Date(fd.get('date') + 'T' + fd.get('time'))
@@ -820,18 +845,18 @@
         if (!customer) {
           const { data: created, error } = await sb.from('customers').insert({
             email,
-            first_name: fd.get('first_name'),
-            last_name: fd.get('last_name'),
-            phone: fd.get('phone') || null,
+            first_name: firstName,
+            last_name: fd.get('last_name') || null,
+            phone: phone || null,
           }).select().single()
           if (error) { errEl.textContent = error.message; errEl.classList.remove('hidden'); return }
           customer = created
         } else {
           // Update name/phone if changed
           await sb.from('customers').update({
-            first_name: fd.get('first_name'),
-            last_name: fd.get('last_name'),
-            phone: fd.get('phone') || customer.phone,
+            first_name: firstName,
+            last_name: fd.get('last_name') || customer.last_name,
+            phone: phone || customer.phone,
           }).eq('id', customer.id)
         }
 
@@ -871,7 +896,7 @@
           <div class="flex items-start justify-between mb-6">
             <div>
               <div class="display text-2xl">${c?.first_name} ${c?.last_name}</div>
-              <div class="text-sm text-[var(--text-muted)]">${c?.email} · ${c?.phone || 'no phone'}</div>
+              <div class="text-sm text-[var(--text-muted)]">${c?.email && !c.email.endsWith('@noemail.local') ? c.email + ' · ' : ''}${c?.phone || (c?.email?.endsWith('@noemail.local') ? 'walk-in (no email)' : 'no phone')}</div>
             </div>
             <button id="close-modal" class="text-[var(--text-muted)] hover:text-[var(--text)] text-2xl leading-none">×</button>
           </div>
