@@ -649,12 +649,14 @@
           const slotEnd = new Date(cur.getTime() + slotDurMs)
           if (slotEnd > endT) break
           if (cur < now) { cur = new Date(cur.getTime() + slotStepMs); continue }
-          const overlapping = state.bookings.filter(b => {
-            if (b.status === 'cancelled') return false
-            const bs = new Date(b.starts_at), be = new Date(b.ends_at)
-            return cur < be && slotEnd > bs
-          }).length
-          slots.push({ start: new Date(cur), end: slotEnd, available: overlapping < capacity })
+          // Same rule as patient site: one start per slot-time (the staggered
+          // interval handles bed-sharing). Capacity = max bookings starting
+          // at this exact moment.
+          const curTime = cur.getTime()
+          const startsHere = state.bookings.filter(b =>
+            b.status !== 'cancelled' && new Date(b.starts_at).getTime() === curTime
+          ).length
+          slots.push({ start: new Date(cur), end: slotEnd, available: startsHere < capacity })
           cur = new Date(cur.getTime() + slotStepMs)
         }
       }
