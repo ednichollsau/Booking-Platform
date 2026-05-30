@@ -391,12 +391,14 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           const slotEnd = new Date(cur.getTime() + slotDurMs)
           if (slotEnd > endT) break
           if (cur < earliest) { cur = new Date(cur.getTime() + slotStepMs); continue }
-          // Count overlapping confirmed bookings; slot is full only at capacity
-          const overlapping = state.bookedSlots.filter(b => {
-            const bs = new Date(b.starts_at), be = new Date(b.ends_at)
-            return cur < be && slotEnd > bs
-          }).length
-          slots.push({ start: new Date(cur), end: slotEnd, booked: overlapping >= capacity })
+          // Each start-time slot can hold up to `capacity` bookings starting
+          // at that exact time. For multi-bed, the staggered 15-min interval
+          // is what cycles beds — not concurrent overlap.
+          const curTime = cur.getTime()
+          const startsHere = state.bookedSlots.filter(b =>
+            new Date(b.starts_at).getTime() === curTime
+          ).length
+          slots.push({ start: new Date(cur), end: slotEnd, booked: startsHere >= capacity })
           cur = new Date(cur.getTime() + slotStepMs)
         }
       }
