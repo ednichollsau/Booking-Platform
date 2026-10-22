@@ -102,7 +102,8 @@
   </div>
 
   <script type="module">
-    import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+    import {CLINIC_TZ, dateKey, wallTime, calendarToday, calendarKey, clinicSlots} from "./clinic-time.mjs"
+    import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.7'
 
     const SUPABASE_URL = 'https://bdzasnbzyfkqojqqucil.supabase.co'
     const SUPABASE_KEY = 'sb_publishable_XOH_-PTfkNsPhwY5eMV_Tg_M9GPbWE5'
@@ -121,9 +122,9 @@
     const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
     const fmt = {
       money: p => '£' + (p/100).toFixed(0),
-      time: d => d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
-      dateShort: d => d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }),
-      dateLong: d => d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
+      time: d => d.toLocaleTimeString('en-GB', { timeZone: CLINIC_TZ, hour: '2-digit', minute: '2-digit' }),
+      dateShort: d => d.toLocaleDateString('en-GB', { timeZone: CLINIC_TZ, weekday: 'short', day: 'numeric', month: 'short' }),
+      dateLong: d => d.toLocaleDateString('en-GB', { timeZone: CLINIC_TZ, weekday: 'long', day: 'numeric', month: 'long' })
     }
 
     let currentTab = 'today'
@@ -317,6 +318,7 @@
         authedFetch('availability_rules?select=*&order=day_of_week').catch(() => []),
         authedFetch('availability_overrides?select=*&order=date').catch(() => []),
       ])
+      try { state.operationalIssues = await authedFetch('rpc/admin_operational_issues', {method:'POST',body:'{}'}) } catch { state.operationalIssues = null }
       state.bookings = bookings || []
       state.customers = customers || []
       state.services = services || []
@@ -332,13 +334,17 @@
       }
     }
 
+    function esc(value) {
+      return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+    }
+
     function svc(id) { return state.services.find(s => s.id === id) }
     function cust(id) { return state.customers.find(c => c.id === id) }
     function pkg(id) { return state.packages.find(p => p.id === id) }
     function custPkg(id) { return state.customerPackages.find(cp => cp.id === id) }
     function isToday(date) {
       const d = new Date(date), t = new Date()
-      return d.getFullYear() === t.getFullYear() && d.getMonth() === t.getMonth() && d.getDate() === t.getDate()
+      return dateKey(d) === dateKey(t)
     }
 
     function render() {
@@ -350,14 +356,25 @@
       }
     }
 
+    function operationalIssuesHtml() {
+      const issues = state.operationalIssues
+      if (!issues) return '<p class="text-sm text-red-700 mb-4">Payment and email delivery checks could not be loaded. Refresh to try again.</p>'
+      if (!issues.payments.length && !issues.emails.length) return ''
+      return `<div class="card rounded-xl p-5 mb-6 border border-red-300"><h2 class="font-semibold mb-3">Needs attention</h2>
+        ${issues.payments.map(p => `<p class="text-sm mb-2">Payment ${esc(p.session || p.id)}: ${esc(p.status)}. ${esc(p.reason || 'Confirmation pending.')}</p>`).join('')}
+        ${issues.emails.map(e => `<p class="text-sm mb-2">${esc(e.kind)} email for ${esc(e.reference_id)}: ${esc(e.status)} (${e.attempts} attempts). ${esc(e.error)}</p>`).join('')}
+        <p class="text-xs mt-3">Check the payment in Stripe or delivery in Resend before retrying manually.</p></div>`
+    }
+
     function renderToday() {
       const today = state.bookings.filter(b => isToday(b.starts_at) && b.status !== 'cancelled')
         .sort((a,b) => new Date(a.starts_at) - new Date(b.starts_at))
       const completedToday = today.filter(b => b.status === 'completed').length
       const upcomingToday = today.filter(b => b.status === 'confirmed' && new Date(b.starts_at) >= new Date()).length
       const next = today.find(b => b.status === 'confirmed' && new Date(b.starts_at) >= new Date())
-      const dateStr = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+      const dateStr = new Date().toLocaleDateString('en-GB', { timeZone: CLINIC_TZ, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
       viewEl.innerHTML = `
+        ${operationalIssuesHtml()}
         <div class="view">
           <h1 class="display text-3xl mb-2">${dateStr}</h1>
           <p class="text-[var(--text-muted)] mb-8">${today.length} session${today.length !== 1 ? 's' : ''} today · ${completedToday} completed · ${upcomingToday} upcoming</p>
@@ -382,7 +399,7 @@
                 const pkgName = cp ? pkg(cp.package_id)?.name : null
                 return `<div data-id="${b.id}" class="booking-row card card-hover rounded-xl p-4 flex items-center gap-4 cursor-pointer">
                   <div class="text-center min-w-[72px]"><div class="display text-xl">${fmt.time(new Date(b.starts_at))}</div><div class="text-xs text-[var(--text-muted)]">${s?.duration_minutes}min</div></div>
-                  <div class="flex-1"><div class="font-semibold">${c?.first_name} ${c?.last_name}</div><div class="text-sm text-[var(--text-muted)]">${s?.name}${pkgName ? ` · ${pkgName}` : ''}</div></div>
+                  <div class="flex-1"><div class="font-semibold">${esc(c?.first_name)} ${esc(c?.last_name)}</div><div class="text-sm text-[var(--text-muted)]">${esc(s?.name)}${pkgName ? ` · ${esc(pkgName)}` : ''}</div></div>
                   <span class="badge badge-${b.status}">${b.status}</span>
                 </div>`
               }).join('')}
@@ -398,7 +415,7 @@
         .sort((a,b) => new Date(a.starts_at) - new Date(b.starts_at))
       const grouped = {}
       for (const b of future) {
-        const key = new Date(b.starts_at).toISOString().slice(0,10)
+        const key = dateKey(new Date(b.starts_at))
         if (!grouped[key]) grouped[key] = []
         grouped[key].push(b)
       }
@@ -416,7 +433,7 @@
                   const pkgName = cp ? pkg(cp.package_id)?.name : null
                   return `<div data-id="${b.id}" class="booking-row card card-hover rounded-xl p-4 flex items-center gap-4 cursor-pointer">
                     <div class="text-center min-w-[72px]"><div class="display text-xl">${fmt.time(new Date(b.starts_at))}</div><div class="text-xs text-[var(--text-muted)]">${s?.duration_minutes}min</div></div>
-                    <div class="flex-1"><div class="font-semibold">${c?.first_name} ${c?.last_name}</div><div class="text-sm text-[var(--text-muted)]">${s?.name}${pkgName ? ` · ${pkgName}` : ''}</div></div>
+                    <div class="flex-1"><div class="font-semibold">${esc(c?.first_name)} ${esc(c?.last_name)}</div><div class="text-sm text-[var(--text-muted)]">${esc(s?.name)}${pkgName ? ` · ${esc(pkgName)}` : ''}</div></div>
                     <span class="badge badge-${b.status}">${b.status}</span>
                   </div>`
                 }).join('')}
@@ -446,7 +463,7 @@
             <div class="space-y-2">
               ${customersWithStats.map(c => `<div data-id="${c.id}" class="customer-row card card-hover rounded-xl p-4 cursor-pointer">
                 <div class="flex items-center justify-between gap-4">
-                  <div class="flex-1"><div class="font-semibold">${c.first_name} ${c.last_name}</div><div class="text-sm text-[var(--text-muted)]">${c.email} · ${c.phone || 'no phone'}</div></div>
+                  <div class="flex-1"><div class="font-semibold">${esc(c.first_name)} ${esc(c.last_name)}</div><div class="text-sm text-[var(--text-muted)]">${esc(c.email)} · ${esc(c.phone || 'no phone')}</div></div>
                   <div class="text-right text-sm">
                     <div class="text-[var(--text-muted)]">${c.bookingCount} booking${c.bookingCount !== 1 ? 's' : ''}</div>
                     ${c.totalRemaining > 0 ? `<div class="text-[var(--accent)] font-semibold">${c.totalRemaining} session${c.totalRemaining !== 1 ? 's' : ''} in package</div>` : ''}
@@ -469,7 +486,7 @@
         if (!rulesByDay[r.day_of_week]) rulesByDay[r.day_of_week] = []
         rulesByDay[r.day_of_week].push(r)
       }
-      const today = new Date().toISOString().slice(0,10)
+      const today = dateKey()
       const futureOverrides = state.availabilityOverrides
         .filter(o => o.date >= today)
         .sort((a,b) => a.date.localeCompare(b.date))
@@ -507,7 +524,7 @@
             ${futureOverrides.length === 0 ? '<div class="text-sm text-[var(--text-muted)]">No upcoming closures.</div>' : futureOverrides.map(o => `
               <div class="card rounded-xl p-4 flex items-center gap-3">
                 <div class="font-semibold">${new Date(o.date + 'T00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</div>
-                <div class="flex-1 text-sm text-[var(--text-muted)]">${o.reason || 'Closed'}</div>
+                <div class="flex-1 text-sm text-[var(--text-muted)]">${esc(o.reason || 'Closed')}</div>
                 <button data-id="${o.id}" class="del-override text-xs text-[var(--danger)] hover:underline">Remove</button>
               </div>
             `).join('')}
@@ -630,43 +647,13 @@
 
     // Compute available slot start-times for a given date + service
     function adminGenerateSlots(date, service) {
-      const dow = date.getDay()
-      const rules = state.availabilityRules.filter(r =>
-        r.day_of_week === dow && (!r.service_id || r.service_id === service.id)
-      )
-      if (rules.length === 0) return []
-      const slots = []
-      const now = new Date()
-      const slotDurMs = service.duration_minutes * 60 * 1000
-      const slotStepMs = (service.slot_interval_minutes || service.duration_minutes) * 60 * 1000
-      const capacity = service.concurrent_capacity || 1
-      for (const rule of rules) {
-        const [sH, sM] = rule.start_time.split(':').map(Number)
-        const [eH, eM] = rule.end_time.split(':').map(Number)
-        let cur = new Date(date); cur.setHours(sH, sM, 0, 0)
-        const endT = new Date(date); endT.setHours(eH, eM, 0, 0)
-        while (cur < endT) {
-          const slotEnd = new Date(cur.getTime() + slotDurMs)
-          if (slotEnd > endT) break
-          if (cur < now) { cur = new Date(cur.getTime() + slotStepMs); continue }
-          // Same rule as patient site: one start per slot-time (the staggered
-          // interval handles bed-sharing). Capacity = max bookings starting
-          // at this exact moment.
-          const curTime = cur.getTime()
-          const startsHere = state.bookings.filter(b =>
-            b.status !== 'cancelled' && new Date(b.starts_at).getTime() === curTime
-          ).length
-          slots.push({ start: new Date(cur), end: slotEnd, available: startsHere < capacity })
-          cur = new Date(cur.getTime() + slotStepMs)
-        }
-      }
-      slots.sort((a, b) => a.start - b.start)
-      return slots
+      return clinicSlots({date, service, rules: state.availabilityRules,
+        overrides: state.availabilityOverrides, bookings: state.bookings, admin: true})
     }
 
     function adminGetAvailableDates(service, days = 60) {
       const dates = []
-      const start = new Date(); start.setHours(0,0,0,0)
+      const start = calendarToday()
       for (let i = 0; i < days; i++) {
         const d = new Date(start); d.setDate(d.getDate() + i)
         const slots = adminGenerateSlots(d, service).filter(s => s.available)
@@ -694,7 +681,7 @@
                   const contact = c.email && c.email.endsWith('@noemail.local')
                     ? (c.phone || '(no contact)')
                     : c.email
-                  return `<option value="${c.id}">${name} — ${contact}</option>`
+                  return `<option value="${c.id}">${esc(name)} — ${esc(contact)}</option>`
                 }).join('')}</optgroup>` : ''}
               </select>
             </div>
@@ -839,7 +826,7 @@
         }
         const service = state.services.find(s => s.id === fd.get('service_id'))
         if (!service) return
-        const startsAt = new Date(fd.get('date') + 'T' + fd.get('time'))
+        const startsAt = wallTime(fd.get('date'), fd.get('time'))
         const endsAt = new Date(startsAt.getTime() + service.duration_minutes * 60 * 1000)
 
         // Find or create customer
@@ -897,29 +884,29 @@
         <div class="p-6">
           <div class="flex items-start justify-between mb-6">
             <div>
-              <div class="display text-2xl">${c?.first_name} ${c?.last_name}</div>
+              <div class="display text-2xl">${esc(c?.first_name)} ${esc(c?.last_name)}</div>
               <div class="text-sm text-[var(--text-muted)]">${c?.email && !c.email.endsWith('@noemail.local') ? c.email + ' · ' : ''}${c?.phone || (c?.email?.endsWith('@noemail.local') ? 'walk-in (no email)' : 'no phone')}</div>
             </div>
             <button id="close-modal" class="text-[var(--text-muted)] hover:text-[var(--text)] text-2xl leading-none">×</button>
           </div>
           <div class="card rounded-lg p-4 mb-6 bg-[var(--bg)]">
             <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Appointment</div>
-            <div class="font-semibold">${s?.name}</div>
+            <div class="font-semibold">${esc(s?.name)}</div>
             <div class="text-sm text-[var(--text-muted)]">${fmt.dateLong(new Date(b.starts_at))} at ${fmt.time(new Date(b.starts_at))}</div>
             <div class="mt-2 flex gap-2 items-center">
               <span class="badge badge-${b.status}">${b.status}</span>
-              ${pkgName ? `<span class="badge badge-package">${pkgName}</span>` : ''}
+              ${pkgName ? `<span class="badge badge-package">${esc(pkgName)}</span>` : ''}
             </div>
           </div>
           <div class="mb-6">
             <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3">Intake</div>
-            ${intake.reason ? `<div class="mb-3"><div class="text-sm font-semibold mb-1">What brings you in</div><div class="text-sm text-[var(--text-muted)] whitespace-pre-wrap">${intake.reason}</div></div>` : '<div class="text-sm text-[var(--text-muted)]">No intake form submitted.</div>'}
-            ${intake.medications ? `<div class="mb-3"><div class="text-sm font-semibold mb-1">Current medications</div><div class="text-sm text-[var(--text-muted)] whitespace-pre-wrap">${intake.medications}</div></div>` : ''}
-            ${intake.conditions ? `<div class="mb-3"><div class="text-sm font-semibold mb-1">Health conditions</div><div class="text-sm text-[var(--text-muted)] whitespace-pre-wrap">${intake.conditions}</div></div>` : ''}
+            ${intake.reason ? `<div class="mb-3"><div class="text-sm font-semibold mb-1">What brings you in</div><div class="text-sm text-[var(--text-muted)] whitespace-pre-wrap">${esc(intake.reason)}</div></div>` : '<div class="text-sm text-[var(--text-muted)]">No intake form submitted.</div>'}
+            ${intake.medications ? `<div class="mb-3"><div class="text-sm font-semibold mb-1">Current medications</div><div class="text-sm text-[var(--text-muted)] whitespace-pre-wrap">${esc(intake.medications)}</div></div>` : ''}
+            ${intake.conditions ? `<div class="mb-3"><div class="text-sm font-semibold mb-1">Health conditions</div><div class="text-sm text-[var(--text-muted)] whitespace-pre-wrap">${esc(intake.conditions)}</div></div>` : ''}
           </div>
           <div class="mb-6">
             <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Session journal</div>
-            <textarea id="journal-input" rows="8" class="input w-full px-4 py-3 rounded-lg" placeholder="Pulse, tongue, points used, response, follow-up plan…">${b.practitioner_journal || ''}</textarea>
+            <textarea id="journal-input" rows="8" class="input w-full px-4 py-3 rounded-lg" placeholder="Pulse, tongue, points used, response, follow-up plan…">${esc(b.practitioner_journal || '')}</textarea>
             <p class="text-xs text-[var(--text-muted)] mt-2">Private clinical notes. Persists with this booking and visible in the patient's history.</p>
           </div>
           <div class="flex gap-2">
@@ -965,16 +952,6 @@
             method: 'PATCH',
             body: JSON.stringify({ status: 'cancelled' })
           })
-          if (b.customer_package_id) {
-            const bals = await authedFetch(`customer_package_balances?select=*&customer_package_id=eq.${b.customer_package_id}&service_id=eq.${b.service_id}`)
-            const bal = Array.isArray(bals) && bals[0]
-            if (bal) {
-              await authedFetch(`customer_package_balances?id=eq.${bal.id}`, {
-                method: 'PATCH',
-                body: JSON.stringify({ sessions_remaining: bal.sessions_remaining + 1 })
-              })
-            }
-          }
           await loadAll(); closeModal(); render()
         } catch (err) {
           alert('Cancel failed: ' + err.message)
@@ -990,9 +967,9 @@
         <div class="p-6">
           <div class="flex items-start justify-between mb-6">
             <div>
-              <div class="display text-2xl">${c.first_name} ${c.last_name}</div>
-              <div class="text-sm text-[var(--text-muted)]">${c.email} · ${c.phone || 'no phone'}</div>
-              <div class="text-xs text-[var(--text-muted)] mt-1">Patient since ${new Date(c.created_at).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })}</div>
+              <div class="display text-2xl">${esc(c.first_name)} ${esc(c.last_name)}</div>
+              <div class="text-sm text-[var(--text-muted)]">${esc(c.email)} · ${esc(c.phone || 'no phone')}</div>
+              <div class="text-xs text-[var(--text-muted)] mt-1">Patient since ${new Date(c.created_at).toLocaleDateString('en-GB', { timeZone: CLINIC_TZ, month: 'long', year: 'numeric' })}</div>
             </div>
             <button id="close-modal" class="text-[var(--text-muted)] hover:text-[var(--text)] text-2xl leading-none">×</button>
           </div>
@@ -1003,9 +980,9 @@
               const balances = state.balances.filter(b => b.customer_package_id === cp.id)
               const expires = new Date(cp.expires_at)
               return `<div class="card rounded-lg p-4 mb-2 bg-[var(--bg)]">
-                <div class="flex justify-between items-start mb-2"><div class="font-semibold">${p?.name}</div><span class="badge badge-${cp.status === 'active' ? 'confirmed' : 'cancelled'}">${cp.status}</span></div>
-                <div class="space-y-1 text-sm">${balances.map(b => { const s = svc(b.service_id); return `<div class="flex justify-between"><span class="text-[var(--text-muted)]">${s?.name}</span><span class="font-semibold">${b.sessions_remaining} remaining</span></div>` }).join('')}</div>
-                <div class="text-xs text-[var(--text-muted)] mt-2">Expires ${expires.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</div>
+                <div class="flex justify-between items-start mb-2"><div class="font-semibold">${esc(p?.name)}</div><span class="badge badge-${cp.status === 'active' ? 'confirmed' : 'cancelled'}">${cp.status}</span></div>
+                <div class="space-y-1 text-sm">${balances.map(b => { const s = svc(b.service_id); return `<div class="flex justify-between"><span class="text-[var(--text-muted)]">${esc(s?.name)}</span><span class="font-semibold">${b.sessions_remaining} remaining</span></div>` }).join('')}</div>
+                <div class="text-xs text-[var(--text-muted)] mt-2">Expires ${expires.toLocaleDateString('en-GB', { timeZone: CLINIC_TZ, day: 'numeric', month: 'long', year: 'numeric' })}</div>
               </div>`
             }).join('')}
           </div>` : ''}
@@ -1016,17 +993,17 @@
               const intake = b.intake_response || {}
               return `<div class="border-b border-[var(--border)] last:border-0 py-3">
                 <div class="flex justify-between items-center mb-1">
-                  <div><div class="font-medium">${s?.name}</div><div class="text-xs text-[var(--text-muted)]">${fmt.dateShort(new Date(b.starts_at))} at ${fmt.time(new Date(b.starts_at))}</div></div>
+                  <div><div class="font-medium">${esc(s?.name)}</div><div class="text-xs text-[var(--text-muted)]">${fmt.dateShort(new Date(b.starts_at))} at ${fmt.time(new Date(b.starts_at))}</div></div>
                   <span class="badge badge-${b.status}">${b.status}</span>
                 </div>
-                ${intake.reason ? `<div class="text-xs text-[var(--text-muted)] mt-1"><span class="font-semibold">Reason:</span> ${intake.reason}</div>` : ''}
-                ${b.practitioner_journal ? `<div class="text-xs mt-2 p-2 bg-[var(--bg)] rounded-lg whitespace-pre-wrap">${b.practitioner_journal}</div>` : ''}
+                ${intake.reason ? `<div class="text-xs text-[var(--text-muted)] mt-1"><span class="font-semibold">Reason:</span> ${esc(intake.reason)}</div>` : ''}
+                ${b.practitioner_journal ? `<div class="text-xs mt-2 p-2 bg-[var(--bg)] rounded-lg whitespace-pre-wrap">${esc(b.practitioner_journal)}</div>` : ''}
               </div>`
             }).join('')}
           </div>
           <div>
             <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Patient overview notes</div>
-            <textarea id="cust-notes" rows="3" class="input w-full px-4 py-3 rounded-lg mb-3" placeholder="Long-term patterns, ongoing context, anything not tied to a single session...">${c.notes || ''}</textarea>
+            <textarea id="cust-notes" rows="3" class="input w-full px-4 py-3 rounded-lg mb-3" placeholder="Long-term patterns, ongoing context, anything not tied to a single session...">${esc(c.notes || '')}</textarea>
             <button id="save-cust-notes" class="btn-primary px-4 py-2 rounded-lg text-sm font-semibold">Save notes</button>
           </div>
         </div>
@@ -1060,7 +1037,7 @@
         await loadAll()
         render()
       } catch (err) {
-        viewEl.innerHTML = `<div class="text-red-600">Error loading data: ${err.message}</div>`
+        viewEl.innerHTML = `<div class="text-red-600">Error loading data: ${esc(err.message)}</div>`
       }
     }
 

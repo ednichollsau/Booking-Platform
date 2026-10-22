@@ -136,6 +136,7 @@
   </div>
 
   <script type="module">
+    import {CLINIC_TZ, dateKey, wallTime, calendarToday, calendarKey, clinicSlots} from "./clinic-time.mjs"
     import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.7'
 
     const SUPABASE_URL = 'https://bdzasnbzyfkqojqqucil.supabase.co'
@@ -303,12 +304,12 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
     }
 
     async function loadBookedSlots() {
-      const start = new Date(); start.setHours(0,0,0,0)
+      const start = wallTime(state.weekStart ? calendarKey(state.weekStart) : dateKey())
       const end = new Date(start); end.setDate(end.getDate() + 60)
       const path = `booked_slots?select=*&starts_at=gte.${encodeURIComponent(start.toISOString())}&starts_at=lt.${encodeURIComponent(end.toISOString())}`
       try {
-        state.bookedSlots = await rawFetch(path) || []
-      } catch { state.bookedSlots = [] }
+        state.bookedSlots = await rawFetch(path) || []; state.slotsUnavailable = false
+      } catch { state.slotsUnavailable = true; console.error('Unable to check availability; booking disabled until refresh') }
     }
 
     async function loadCustomer() {
@@ -322,7 +323,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       if (state.customer) {
         try {
           const cps = await authedFetch(`customer_packages?select=*&customer_id=eq.${state.customer.id}&status=eq.active&order=purchased_at.desc`)
-          state.customerPackage = (cps && cps[0]) || null
+          state.customerPackage = (cps || []).find(p => !p.expires_at || Date.parse(p.expires_at) > Date.now()) || null
         } catch {}
         if (state.customerPackage) {
           try {
@@ -342,8 +343,8 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
 
     const fmt = {
       money: p => '£' + (p/100).toFixed(0),
-      time: d => d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
-      dateLong: d => d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
+      time: d => d.toLocaleTimeString('en-GB', { timeZone: CLINIC_TZ, hour: '2-digit', minute: '2-digit' }),
+      dateLong: d => d.toLocaleDateString('en-GB', { timeZone: CLINIC_TZ, weekday: 'long', day: 'numeric', month: 'long' })
     }
 
     // Escape user-provided strings before injecting into HTML templates.
@@ -357,53 +358,9 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
     }
 
     function generateSlots(date) {
-      const dow = date.getDay()
-      const svc = state.selectedService
-      if (!svc) return []
-      const serviceId = svc.id
-      const durationMin = svc.duration_minutes || 60
-      const intervalMin = svc.slot_interval_minutes || durationMin
-      const capacity = svc.concurrent_capacity || 1
-      // Block dates closed via admin override
-      const yyyy = date.getFullYear()
-      const mm = String(date.getMonth() + 1).padStart(2, '0')
-      const dd = String(date.getDate()).padStart(2, '0')
-      const localIso = `${yyyy}-${mm}-${dd}`
-      const closed = (state.availabilityOverrides || []).some(o => o.date === localIso && o.type === 'closed')
-      if (closed) return []
-      const rules = state.availabilityRules.filter(r =>
-        r.day_of_week === dow && (!r.service_id || r.service_id === serviceId)
-      )
-      if (rules.length === 0) return []
-      const slots = []
-      const now = new Date()
-      // Private appointments need 24h notice so Ed can confirm; multi-bed is fine same-day
-      const minLeadMs = (svc.slug === 'private') ? 24 * 60 * 60 * 1000 : 0
-      const earliest = new Date(now.getTime() + minLeadMs)
-      const slotDurMs = durationMin * 60 * 1000
-      const slotStepMs = intervalMin * 60 * 1000
-      for (const rule of rules) {
-        const [sH, sM] = rule.start_time.split(':').map(Number)
-        const [eH, eM] = rule.end_time.split(':').map(Number)
-        let cur = new Date(date); cur.setHours(sH, sM, 0, 0)
-        const endT = new Date(date); endT.setHours(eH, eM, 0, 0)
-        while (cur < endT) {
-          const slotEnd = new Date(cur.getTime() + slotDurMs)
-          if (slotEnd > endT) break
-          if (cur < earliest) { cur = new Date(cur.getTime() + slotStepMs); continue }
-          // Each start-time slot can hold up to `capacity` bookings starting
-          // at that exact time. For multi-bed, the staggered 15-min interval
-          // is what cycles beds — not concurrent overlap.
-          const curTime = cur.getTime()
-          const startsHere = state.bookedSlots.filter(b =>
-            new Date(b.starts_at).getTime() === curTime
-          ).length
-          slots.push({ start: new Date(cur), end: slotEnd, booked: startsHere >= capacity })
-          cur = new Date(cur.getTime() + slotStepMs)
-        }
-      }
-      slots.sort((a, b) => a.start - b.start)
-      return slots
+      if (state.slotsUnavailable) return []
+      return clinicSlots({date, service: state.selectedService, rules: state.availabilityRules,
+        overrides: state.availabilityOverrides, bookings: state.bookedSlots})
     }
 
     function getMondayOf(date) {
@@ -417,7 +374,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
 
     function getWeekDays(weekStart) {
       const days = []
-      const todayMidnight = new Date(); todayMidnight.setHours(0,0,0,0)
+      const todayMidnight = calendarToday(); todayMidnight.setHours(0,0,0,0)
       for (let i = 0; i < 7; i++) {
         const d = new Date(weekStart); d.setDate(d.getDate() + i)
         const slots = generateSlots(d)
@@ -665,7 +622,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       // Wait for auth to settle
       const { data: { session: authSession } } = await sb.auth.getSession()
       if (!authSession) {
-        viewEl.innerHTML = `<div class="view max-w-md mx-auto text-center py-16"><h2 class="display text-2xl mb-3">Please sign in</h2><p class="text-[var(--text-muted)] mb-6">Your payment was successful, but we need you to sign in to view your package.</p><a href="${window.location.pathname}" class="btn-primary inline-block px-6 py-3 rounded-lg">Sign in</a></div>`
+        viewEl.innerHTML = `<div class="view max-w-md mx-auto text-center py-16"><h2 class="display text-2xl mb-3">Please sign in</h2><p class="text-[var(--text-muted)] mb-6">Please sign in to check whether your package has activated.</p><a href="${window.location.pathname}" class="btn-primary inline-block px-6 py-3 rounded-lg">Sign in</a></div>`
         return
       }
       state.authUser = authSession.user
@@ -682,7 +639,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         attempts++
       }
       if (!cp) {
-        viewEl.innerHTML = `<div class="view max-w-md mx-auto text-center py-16"><h2 class="display text-2xl mb-3">Almost there</h2><p class="text-[var(--text-muted)] mb-6">Your payment was received but the package is taking longer than expected to activate. Please refresh the page in a moment, or contact us if it doesn't appear.</p><button onclick="window.location.reload()" class="btn-primary px-6 py-3 rounded-lg">Refresh</button></div>`
+        viewEl.innerHTML = `<div class="view max-w-md mx-auto text-center py-16"><h2 class="display text-2xl mb-3">Almost there</h2><p class="text-[var(--text-muted)] mb-6">Your package has not yet been confirmed. Please refresh the page in a moment, or contact us if it doesn't appear.</p><button onclick="window.location.reload()" class="btn-primary px-6 py-3 rounded-lg">Refresh</button></div>`
         return
       }
       // Reload customer so customerPackage + customerBalances reflect the new package
@@ -771,46 +728,35 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
             btn.disabled = false; btn.textContent = 'Yes, cancel my booking'
           }
         } catch (err) {
-          result.innerHTML = `<span class="text-red-600">Error: ${err.message}</span>`
+          result.innerHTML = `<span class="text-red-600">Error: ${esc(err.message)}</span>`
           btn.disabled = false; btn.textContent = 'Yes, cancel my booking'
         }
       })
     }
 
-    function handleBookingPaidReturn() {
-      const stashed = sessionStorage.getItem('booking_paid_customer')
-      let info = {}
-      try { info = stashed ? JSON.parse(stashed) : {} } catch {}
-      sessionStorage.removeItem('booking_paid_customer')
-      window.history.replaceState({}, '', window.location.pathname)
-      const slotDate = info.slotStart ? new Date(info.slotStart) : null
-      viewEl.innerHTML = `
-        <div class="view max-w-md mx-auto text-center">
-          <div class="w-16 h-16 mx-auto mb-6 rounded-full bg-[var(--primary)] flex items-center justify-center">
-            <svg class="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
-          </div>
-          <h1 class="display text-4xl mb-3">Payment received</h1>
-          <p class="text-[var(--text-muted)] mb-8">${info.email ? `Confirmation will be sent to ${esc(info.email)}` : 'Confirmation will be sent to your email'}</p>
-          ${info.serviceName && slotDate ? `
-            <div class="card rounded-xl p-6 text-left mb-6">
-              <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-2">Your appointment</div>
-              <div class="font-semibold text-lg mb-1">${esc(info.serviceName)}</div>
-              <div class="text-[var(--text-muted)]">${fmt.dateLong(slotDate)} at ${fmt.time(slotDate)}</div>
-              <div class="text-sm text-[var(--accent)] font-semibold mt-3">Paid in full</div>
-            </div>
-          ` : ''}
-          <button id="home-btn" class="btn-secondary px-6 py-3 rounded-lg">Book another session</button>
-        </div>
-      `
-      document.getElementById('home-btn').addEventListener('click', () => {
-        state.selectedService = null; state.selectedPackage = null
-        state.selectedDate = null; state.selectedSlot = null
-        state.flow = null
-        history.length = 0
-        setView('home', false)
-      })
-      // Refresh booked slots in background so the slot now shows as taken
-      loadBookedSlots()
+    async function handleBookingPaidReturn() {
+      const params = new URLSearchParams(window.location.search)
+      const checkoutId = params.get('checkout_id')
+      let status = 'pending'
+      viewEl.innerHTML = '<div class="view text-center py-16" role="status">Checking your payment and booking…</div>'
+      if (checkoutId && /^[0-9a-f-]{36}$/i.test(checkoutId)) {
+        for (let attempt=0; attempt<20; attempt++) {
+          try {
+            const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/checkout_status`, {
+              method:'POST',headers:{apikey:SUPABASE_KEY,'Content-Type':'application/json'},body:JSON.stringify({p_id:checkoutId})
+            })
+            if (response.ok) status = (await response.json())?.status || 'pending'
+          } catch {}
+          if (status !== 'pending') break
+          await new Promise(resolve => setTimeout(resolve,1500))
+        }
+      }
+      const heading = status==='completed' ? (params.get('type')==='package' ? 'Your package is ready' : 'Your appointment is confirmed') : status==='refunded' ? 'Your payment has been refunded' : status==='refund_required' ? 'Your booking could not be completed' : 'Confirmation is still pending'
+      const detail = status==='completed' ? 'We will email your confirmation shortly.' : status==='refunded' ? 'The appointment could not be booked. Your refund has been issued.' : status==='refund_required' ? 'Your payment needs a refund. Please contact Ed if you need help; the issue is recorded for follow-up.' : 'Please wait for your confirmation email before treating this appointment as booked. You can refresh this page to check again, or contact Ed.'
+      viewEl.innerHTML = `<div class="view max-w-md mx-auto text-center py-16"><h1 class="display text-3xl mb-4">${heading}</h1><p class="mb-6">${detail}</p><a class="btn-primary inline-block px-6 py-3 rounded-lg" href="/?view=my-bookings">My bookings</a><p class="mt-5"><a href="mailto:acu@ednicholls.com" class="underline">Contact Ed</a></p></div>`
+      if(status==='completed' || status==='refunded') {
+        sessionStorage.removeItem('booking_paid_customer')
+      }
     }
 
     function renderPickPackageService() {
@@ -842,9 +788,9 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
 
     function renderDateSelect() {
       // Initialise to current week's Monday on first entry
-      if (!state.weekStart) state.weekStart = getMondayOf(new Date())
+      if (!state.weekStart) state.weekStart = getMondayOf(calendarToday())
       const days = getWeekDays(state.weekStart)
-      const todayMonday = getMondayOf(new Date())
+      const todayMonday = getMondayOf(calendarToday())
       const canGoPrev = state.weekStart > todayMonday
       const weekEnd = new Date(state.weekStart); weekEnd.setDate(weekEnd.getDate() + 6)
       const monthsLabel = state.weekStart.getMonth() === weekEnd.getMonth()
@@ -855,6 +801,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         <div class="view">
           <h1 class="display text-3xl md:text-4xl mb-2">${esc(state.selectedService.name)}</h1>
           <p class="text-[var(--text-muted)] mb-6">Choose a date.</p>
+          ${state.slotsUnavailable ? '<p role="alert" class="text-red-700">Availability could not be loaded. Please refresh to try again.</p>' : ''}
 
           <div class="flex items-center justify-between gap-2 mb-4">
             <button id="week-prev" aria-label="Previous week" class="px-3 py-2 rounded-lg shrink-0 ${canGoPrev ? 'btn-secondary cursor-pointer' : 'opacity-30 cursor-not-allowed'}" ${canGoPrev ? '' : 'disabled'}>←<span class="hidden sm:inline ml-1">Previous</span></button>
@@ -880,15 +827,17 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       const prevBtn = document.getElementById('week-prev')
       const nextBtn = document.getElementById('week-next')
       if (prevBtn && !prevBtn.disabled) {
-        prevBtn.addEventListener('click', () => {
+        prevBtn.addEventListener('click', async () => {
           const newStart = new Date(state.weekStart); newStart.setDate(newStart.getDate() - 7)
           state.weekStart = newStart < todayMonday ? todayMonday : newStart
+          await loadBookedSlots()
           renderDateSelect()
         })
       }
-      nextBtn.addEventListener('click', () => {
+      nextBtn.addEventListener('click', async () => {
         const newStart = new Date(state.weekStart); newStart.setDate(newStart.getDate() + 7)
         state.weekStart = newStart
+        await loadBookedSlots()
         renderDateSelect()
       })
       viewEl.querySelectorAll('.date-pill').forEach(pill => {
@@ -904,8 +853,8 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       const slots = generateSlots(state.selectedDate)
       viewEl.innerHTML = `
         <div class="view max-w-2xl mx-auto">
-          <h1 class="display text-3xl mb-2">${fmt.dateLong(state.selectedDate)}</h1>
-          <p class="text-[var(--text-muted)] mb-8">Choose a time.</p>
+          <h1 class="display text-3xl mb-2">${state.selectedDate.toLocaleDateString('en-GB', {weekday:'long',day:'numeric',month:'long'})}</h1>
+          <p class="text-[var(--text-muted)] mb-8">Choose a time. All times are UK time.</p>
           <div class="grid grid-cols-3 sm:grid-cols-4 gap-2">
             ${slots.length === 0 ? '<p class="text-[var(--text-muted)] col-span-full">No availability on this day.</p>' : ''}
             ${slots.map((s, i) => `<button data-idx="${i}" class="slot rounded-lg p-3 text-center" ${s.booked ? 'disabled' : ''}><div class="font-semibold">${fmt.time(s.start)}</div>${s.booked ? '<div class="text-xs">Booked</div>' : ''}</button>`).join('')}
@@ -1463,62 +1412,6 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         }
       }
 
-      // If a known email is entered, swap straight to the short intake page
-      // (same as the signed-in returning-customer flow).
-      const emailField = form.elements['email']
-      const statusEl = document.getElementById('prefill-status')
-      let lastLookedUp = ''
-      let debounceTimer = null
-      async function tryPrefill() {
-        const email = (emailField.value || '').trim().toLowerCase()
-        if (!email || !email.includes('@') || !email.includes('.') || email === lastLookedUp) return
-        lastLookedUp = email
-        statusEl.textContent = 'Checking for a previous booking…'
-        statusEl.classList.remove('hidden')
-        console.log('[booking] looking up email:', email)
-        try {
-          const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/lookup_customer_by_email`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', apikey: SUPABASE_KEY, Accept: 'application/json' },
-            body: JSON.stringify({ p_email: email })
-          })
-          console.log('[booking] lookup status:', r.status)
-          if (!r.ok) {
-            const body = await r.text()
-            console.warn('[booking] lookup error body:', body)
-            statusEl.textContent = `Lookup failed (${r.status}). Continue filling the form.`
-            return
-          }
-          const data = await r.json()
-          console.log('[booking] lookup data:', data)
-          if (!data) { statusEl.classList.add('hidden'); return }
-          // Recognised: stash details on state and switch view
-          state.customer = {
-            email: data.email,
-            first_name: data.first_name,
-            last_name: data.last_name,
-            phone: data.phone,
-            date_of_birth: data.date_of_birth,
-            gender: data.gender,
-            emergency_contact_name: data.emergency_contact_name,
-            emergency_contact_phone: data.emergency_contact_phone,
-            emergency_contact_relationship: data.emergency_contact_relationship,
-          }
-          state.recognizedAnonymous = true
-          setView('intake')
-        } catch (err) {
-          console.warn('[booking] lookup threw:', err)
-          statusEl.classList.add('hidden')
-        }
-      }
-      emailField.addEventListener('blur', tryPrefill)
-      emailField.addEventListener('change', tryPrefill)
-      // Also debounce on input so they don't have to leave the field
-      emailField.addEventListener('input', () => {
-        clearTimeout(debounceTimer)
-        debounceTimer = setTimeout(tryPrefill, 700)
-      })
-
       // Clear invalid state on any input
       form.addEventListener('input', (e) => {
         const t = e.target
@@ -1628,7 +1521,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
             <button data-pkg-svc="${s?.id}" class="pkg-book-btn text-sm font-semibold text-[var(--accent)] hover:underline">Book →</button>
           </div>`
         }).join('')
-        const expires = state.customerPackage.expires_at ? new Date(state.customerPackage.expires_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : ''
+        const expires = state.customerPackage.expires_at ? new Date(state.customerPackage.expires_at).toLocaleDateString('en-GB', { timeZone: CLINIC_TZ, day: 'numeric', month: 'short', year: 'numeric' }) : ''
         return `
           <div class="card rounded-xl p-5 mb-6 border-l-4" style="border-left-color: var(--accent)">
             <div class="text-xs font-semibold text-[var(--accent)] uppercase tracking-widest mb-1">Active package</div>
@@ -1646,7 +1539,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           <div class="card rounded-xl p-4 mb-2 flex items-center gap-4">
             <div class="min-w-[80px] text-center">
               <div class="display text-xl">${fmt.time(dt)}</div>
-              <div class="text-xs text-[var(--text-muted)]">${dt.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</div>
+              <div class="text-xs text-[var(--text-muted)]">${dt.toLocaleDateString('en-GB', { timeZone: CLINIC_TZ, weekday: 'short', day: 'numeric', month: 'short' })}</div>
             </div>
             <div class="flex-1">
               <div class="font-semibold">${esc(s?.name || 'Session')}</div>
@@ -1716,7 +1609,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
 
           <div class="card rounded-xl p-5 mb-4 border-l-4" style="border-left-color: #B85450">
             <div class="text-xs font-semibold uppercase tracking-widest mb-2" style="color:#B85450">Delete your account</div>
-            <p class="text-sm text-[var(--text-muted)] mb-3">Removes your personal identifiers (name, email, phone, contact details). Future bookings are cancelled. Clinical session records are retained for 8 years per UK acupuncture practice retention obligations.</p>
+            <p class="text-sm text-[var(--text-muted)] mb-3">Removes your personal identifiers (name, email, phone, contact details). Future bookings are cancelled. Clinical records remain subject to the practice retention policy. Contact Ed about clinical record deletion.</p>
             <button id="del-btn" class="px-4 py-2 rounded-lg text-sm font-semibold border" style="border-color:#B85450;color:#B85450">Delete my account</button>
           </div>
 
@@ -1738,13 +1631,13 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           URL.revokeObjectURL(url)
           btn.disabled = false; btn.textContent = 'Download my data'
         } catch (err) {
-          document.getElementById('data-result').innerHTML = `<span class="text-red-600">Error: ${err.message}</span>`
+          document.getElementById('data-result').innerHTML = `<span class="text-red-600">Error: ${esc(err.message)}</span>`
           btn.disabled = false; btn.textContent = 'Download my data'
         }
       })
 
       document.getElementById('del-btn').addEventListener('click', async () => {
-        if (!confirm('Delete your account? Your personal details will be anonymised and any upcoming bookings cancelled. Clinical records are retained for 8 years. This cannot be undone.')) return
+        if (!confirm('Delete your account? Your personal details will be anonymised and any upcoming bookings cancelled. Clinical records remain subject to the practice retention policy. This cannot be undone.')) return
         const btn = document.getElementById('del-btn')
         btn.disabled = true; btn.textContent = 'Deleting…'
         try {
@@ -1753,13 +1646,13 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           await sb.auth.signOut()
           viewEl.innerHTML = `
             <div class="view max-w-md mx-auto text-center py-12">
-              <h1 class="display text-3xl mb-3">Account deleted</h1>
-              <p class="text-[var(--text-muted)]">${result.note || ''}</p>
+              <h1 class="display text-3xl mb-3">Account closure requested</h1>
+              <p class="text-[var(--text-muted)]">${esc(result.note || '')}</p>
               <p class="text-[var(--text-muted)] mt-4">${result.cancelled_bookings ? `${result.cancelled_bookings} upcoming booking${result.cancelled_bookings === 1 ? '' : 's'} cancelled.` : ''}</p>
             </div>
           `
         } catch (err) {
-          document.getElementById('data-result').innerHTML = `<span class="text-red-600">Error: ${err.message}</span>`
+          document.getElementById('data-result').innerHTML = `<span class="text-red-600">Error: ${esc(err.message)}</span>`
           btn.disabled = false; btn.textContent = 'Delete my account'
         }
       })
@@ -1950,9 +1843,8 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       }
       if (params.get('stripe_success') === '1') {
         const type = params.get('type') || 'package'
-        if (type === 'booking') {
-          // Booking-paid return doesn't need data preloaded — show success view immediately
-          handleBookingPaidReturn()
+        if (type === 'booking' || params.get('checkout_id')) {
+          await handleBookingPaidReturn()
           return
         }
         // Package-paid return needs auth state restored, fall through to load
@@ -1995,7 +1887,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         }
         render()
       } catch (err) {
-        viewEl.innerHTML = `<div class="text-center text-red-600">Failed to load: ${err.message}</div>`
+        viewEl.innerHTML = `<div class="text-center text-red-600">Failed to load: ${esc(err.message)}</div>`
       }
     }
     init()
