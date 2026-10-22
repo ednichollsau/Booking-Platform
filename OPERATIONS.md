@@ -47,3 +47,15 @@ This is an application export, not a provider-level database snapshot. It exclud
 ## Verification limits
 
 Automated checks cover slot rules, London clock changes, package expiry, credit permissions, collision privacy, atomic payment activation, duplicate fulfilment, cancellation, account closure, queue claiming, Stripe signatures, clinical metadata exclusion and retry responses. PGlite tests are single-engine tests, not a multi-connection load test. Stripe API calls are mocked; no real card charge is needed for this release. Future changes should retain these checks and add a Stripe test-mode end-to-end environment before major payment changes.
+
+## Release verification — 22 October 2026
+
+Production frontend commit b46a1f919144738bd5a6300d2937392aa9557e20 deployed successfully. All five Edge Functions and the database migrations are live. Twenty automated checks passed. The live multi-bed calendar shows 18:00–20:15 for Thursday 22 October. The existing 16:30 appointment was preserved. The approved delivery-test email passed through the production queue and Resend recorded delivery.
+
+Encrypted before/after exports were restored into the isolated verification engine with matching row counts. Daily exports are scheduled for 03:00 local time through the Codex heartbeat `encrypted-booking-backup`. This requires the Mac, Codex and authenticated connector to remain available. Copy the recovery key and encrypted archives to separate secure storage for protection against loss of this Mac.
+
+The post-upgrade security advisor has no ERROR findings. It reports intentionally callable guarded functions and intentionally inaccessible service-only tables. Leaked-password protection remains disabled; review https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection before changing plan or authentication settings.
+
+### Scheduled export procedure
+
+Read scripts/export-booking.sql and execute through the Supabase connector without printing the returned records. Extract the JSON backup object from the tool's result wrapper in memory. Start scripts/receive-backup.mjs with a unique dated encrypted output path in booking-backups using the bundled Node runtime. When using a terminal transport, first set `stty -echo -icanon`; encode the in-memory JSON as UTF-8 base64, stream chunks followed by newlines, then send `END` on its own line. Do not interpolate raw patient data into shell commands. The receiver validates and encrypts through scripts/encrypt-backup.mjs. Run scripts/verify-backup.mjs against the resulting encrypted file and recovery-key.pem; report success only if verification succeeds. Never print the export, recovery key, or private internal settings. Never delete older exports automatically.

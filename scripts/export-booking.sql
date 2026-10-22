@@ -8,6 +8,9 @@ select jsonb_build_object('format_version',1,'exported_at',now(),'project_ref','
 'bookings',(select coalesce(jsonb_agg(to_jsonb(t)),'[]'::jsonb) from public.bookings t),
 'availability_rules',(select coalesce(jsonb_agg(to_jsonb(t)),'[]'::jsonb) from public.availability_rules t),
 'availability_overrides',(select coalesce(jsonb_agg(to_jsonb(t)),'[]'::jsonb) from public.availability_overrides t),
+'pending_checkouts',(select coalesce(jsonb_agg(to_jsonb(t)),'[]'::jsonb) from public.pending_checkouts t),
+'notification_jobs',(select coalesce(jsonb_agg(to_jsonb(t)),'[]'::jsonb) from public.notification_jobs t),
+'account_deletion_requests',(select coalesce(jsonb_agg(to_jsonb(t)),'[]'::jsonb) from public.account_deletion_requests t),
 'audit_log',(select coalesce(jsonb_agg(to_jsonb(t)),'[]'::jsonb) from public.audit_log t)),
 'auth_mapping',(select coalesce(jsonb_agg(jsonb_build_object('id',id,'email',email,'email_confirmed_at',email_confirmed_at)),'[]'::jsonb) from auth.users),
 'schema',jsonb_build_object(
