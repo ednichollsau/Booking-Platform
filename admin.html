@@ -86,6 +86,7 @@
             <button data-tab="today" class="tab active">Today</button>
             <button data-tab="upcoming" class="tab">Upcoming</button>
             <button data-tab="customers" class="tab">Customers</button>
+            <button data-tab="subscribers" class="tab">Email list</button>
             <button data-tab="availability" class="tab">Availability</button>
             <button id="new-booking-btn" class="btn-primary ml-2 px-3 py-2 rounded-lg text-sm">+ New booking</button>
           </nav>
@@ -353,6 +354,7 @@
         case 'upcoming': return renderUpcoming()
         case 'customers': return renderCustomers()
         case 'availability': return renderAvailability()
+        case 'subscribers': return renderSubscribers()
       }
     }
 
@@ -396,7 +398,7 @@
               ${today.map(b => {
                 const c = cust(b.customer_id), s = svc(b.service_id)
                 const cp = b.customer_package_id ? custPkg(b.customer_package_id) : null
-                const pkgName = cp ? pkg(cp.package_id)?.name : null
+                const pkgName = cp ? (cp.custom_name || pkg(cp.package_id)?.name) : null
                 return `<div data-id="${b.id}" class="booking-row card card-hover rounded-xl p-4 flex items-center gap-4 cursor-pointer">
                   <div class="text-center min-w-[72px]"><div class="display text-xl">${fmt.time(new Date(b.starts_at))}</div><div class="text-xs text-[var(--text-muted)]">${s?.duration_minutes}min</div></div>
                   <div class="flex-1"><div class="font-semibold">${esc(c?.first_name)} ${esc(c?.last_name)}</div><div class="text-sm text-[var(--text-muted)]">${esc(s?.name)}${pkgName ? ` · ${esc(pkgName)}` : ''}</div></div>
@@ -430,7 +432,7 @@
                 ${bookings.map(b => {
                   const c = cust(b.customer_id), s = svc(b.service_id)
                   const cp = b.customer_package_id ? custPkg(b.customer_package_id) : null
-                  const pkgName = cp ? pkg(cp.package_id)?.name : null
+                  const pkgName = cp ? (cp.custom_name || pkg(cp.package_id)?.name) : null
                   return `<div data-id="${b.id}" class="booking-row card card-hover rounded-xl p-4 flex items-center gap-4 cursor-pointer">
                     <div class="text-center min-w-[72px]"><div class="display text-xl">${fmt.time(new Date(b.starts_at))}</div><div class="text-xs text-[var(--text-muted)]">${s?.duration_minutes}min</div></div>
                     <div class="flex-1"><div class="font-semibold">${esc(c?.first_name)} ${esc(c?.last_name)}</div><div class="text-sm text-[var(--text-muted)]">${esc(s?.name)}${pkgName ? ` · ${esc(pkgName)}` : ''}</div></div>
@@ -878,14 +880,14 @@
       if (!b) return
       const c = cust(b.customer_id), s = svc(b.service_id)
       const cp = b.customer_package_id ? custPkg(b.customer_package_id) : null
-      const pkgName = cp ? pkg(cp.package_id)?.name : null
+      const pkgName = cp ? (cp.custom_name || pkg(cp.package_id)?.name) : null
       const intake = b.intake_response || {}
       modalContentEl.innerHTML = `
         <div class="p-6">
           <div class="flex items-start justify-between mb-6">
             <div>
               <div class="display text-2xl">${esc(c?.first_name)} ${esc(c?.last_name)}</div>
-              <div class="text-sm text-[var(--text-muted)]">${c?.email && !c.email.endsWith('@noemail.local') ? c.email + ' · ' : ''}${c?.phone || (c?.email?.endsWith('@noemail.local') ? 'walk-in (no email)' : 'no phone')}</div>
+              <div class="text-sm text-[var(--text-muted)]">${c?.email && !c.email.endsWith('@noemail.local') ? esc(c.email) + ' · ' : ''}${esc(c?.phone || (c?.email?.endsWith('@noemail.local') ? 'walk-in (no email)' : 'no phone'))}</div>
             </div>
             <button id="close-modal" class="text-[var(--text-muted)] hover:text-[var(--text)] text-2xl leading-none">×</button>
           </div>
@@ -910,6 +912,7 @@
             <p class="text-xs text-[var(--text-muted)] mt-2">Private clinical notes. Persists with this booking and visible in the patient's history.</p>
           </div>
           <div class="flex gap-2">
+            ${b.status === 'confirmed' ? `<button id="reschedule-booking" class="btn-secondary px-4 py-3 rounded-lg font-semibold">Change time</button>` : ''}
             <button id="save-journal" class="btn-primary flex-1 py-3 rounded-lg font-semibold">Save journal</button>
             ${b.status === 'confirmed' ? `<button id="mark-complete" class="btn-secondary px-4 py-3 rounded-lg font-semibold">Mark complete</button>` : ''}
             ${b.status === 'confirmed' ? `<button id="cancel-booking" class="btn-danger px-4 py-3 rounded-lg font-semibold">Cancel</button>` : ''}
@@ -931,6 +934,7 @@
           alert('Save failed: ' + err.message)
         }
       })
+      document.getElementById('reschedule-booking')?.addEventListener('click', () => openRescheduleModal(b))
       const completeBtn = document.getElementById('mark-complete')
       if (completeBtn) completeBtn.addEventListener('click', async () => {
         const journal = document.getElementById('journal-input').value
@@ -973,6 +977,7 @@
             </div>
             <button id="close-modal" class="text-[var(--text-muted)] hover:text-[var(--text)] text-2xl leading-none">×</button>
           </div>
+          <button id="assign-package" class="btn-primary px-4 py-3 rounded-lg mb-6">Assign package credits</button>
           ${packages.length > 0 ? `<div class="mb-6">
             <div class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-widest mb-3">Active packages</div>
             ${packages.map(cp => {
@@ -980,7 +985,7 @@
               const balances = state.balances.filter(b => b.customer_package_id === cp.id)
               const expires = new Date(cp.expires_at)
               return `<div class="card rounded-lg p-4 mb-2 bg-[var(--bg)]">
-                <div class="flex justify-between items-start mb-2"><div class="font-semibold">${esc(p?.name)}</div><span class="badge badge-${cp.status === 'active' ? 'confirmed' : 'cancelled'}">${cp.status}</span></div>
+                <div class="flex justify-between items-start mb-2"><div class="font-semibold">${esc(cp.custom_name || p?.name)}</div><span class="badge badge-${cp.status === 'active' ? 'confirmed' : 'cancelled'}">${cp.status}</span></div>
                 <div class="space-y-1 text-sm">${balances.map(b => { const s = svc(b.service_id); return `<div class="flex justify-between"><span class="text-[var(--text-muted)]">${esc(s?.name)}</span><span class="font-semibold">${b.sessions_remaining} remaining</span></div>` }).join('')}</div>
                 <div class="text-xs text-[var(--text-muted)] mt-2">Expires ${expires.toLocaleDateString('en-GB', { timeZone: CLINIC_TZ, day: 'numeric', month: 'long', year: 'numeric' })}</div>
               </div>`
@@ -1010,6 +1015,7 @@
       `
       modalEl.classList.remove('hidden')
       document.getElementById('close-modal').addEventListener('click', closeModal)
+      document.getElementById('assign-package').addEventListener('click', () => openAssignPackageModal(c))
       document.getElementById('save-cust-notes').addEventListener('click', async () => {
         const notes = document.getElementById('cust-notes').value
         try {
@@ -1022,6 +1028,86 @@
           alert('Save failed: ' + err.message)
         }
       })
+    }
+
+
+
+    async function renderSubscribers() {
+      viewEl.innerHTML='<p>Loading subscribers…</p>'
+      let rows
+      try {rows=await authedFetch('mailing_subscribers?select=*&subscribed=eq.true&order=consent_recorded_at.desc')} catch(err){viewEl.textContent='Unable to load subscribers: '+err.message;return}
+      viewEl.innerHTML=`<h1 class="display text-3xl mb-3">Email list</h1><p class="mb-5">${rows.length} opted-in subscribers. Booking confirmations remain separate. No campaign is sent from this screen.</p>
+      <button id="sync-reading-subscribers" class="btn-primary p-3 rounded-lg mb-5 mr-2">Import reading-form opt-ins</button><p id="sync-reading-result" role="status" class="mb-3"></p><button id="export-subscribers" class="btn-secondary p-3 rounded-lg mb-5">Export subscribed contacts</button>
+      <details class="card p-5 rounded-xl mb-6"><summary class="font-semibold cursor-pointer">Add existing opt-ins</summary><form id="subscriber-import" class="mt-4">
+      <label class="block mb-3">Email addresses (one per line)<textarea id="subscriber-emails" required rows="5" class="input p-3 w-full rounded-lg"></textarea></label>
+      <label class="block mb-3">Consent source<input id="subscriber-source" required placeholder="e.g. Elemental constitution form" class="input p-3 w-full rounded-lg"></label>
+      <label class="block mb-3">Consent wording or evidence<textarea id="subscriber-evidence" required class="input p-3 w-full rounded-lg"></textarea></label>
+      <label class="flex gap-2 mb-4"><input type="checkbox" required>I confirm these people opted in to marketing updates.</label>
+      <button id="subscriber-save" class="btn-primary p-3 rounded-lg">Add subscribers</button><p id="subscriber-error" role="alert" class="mt-3"></p></form></details>
+      <div class="card rounded-xl divide-y">${rows.map(r=>`<div class="p-4 flex justify-between gap-3"><div><strong>${esc(r.first_name || r.email)}</strong><p>${esc(r.email)}</p><p class="text-xs text-[var(--text-muted)]">${esc(r.source)} · recorded ${fmt.dateShort(new Date(r.consent_recorded_at))}</p><details class="text-xs"><summary>Consent record</summary>${esc(r.consent_text)}</details></div><button data-unsubscribe="${r.id}" class="text-sm underline">Unsubscribe</button></div>`).join('') || '<p class="p-4">No recorded opt-ins yet.</p>'}</div>`
+      document.getElementById('sync-reading-subscribers').onclick=async e=>{
+       const btn=e.target;btn.disabled=true;let count=0,after=0
+       try{do{
+        const r=await fetch(`https://ednichollsconsole.up.railway.app/api/marketing/reading-subscribers?after=${after}`,{headers:{Authorization:`Bearer ${state.accessToken}`}})
+        if(!r.ok)throw new Error('Reading service could not load subscribers. Please try again later.')
+        const page=await r.json()
+        for(const c of page.contacts){if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.email?.trim() || ''))continue
+         await authedFetch('rpc/admin_record_subscriber',{method:'POST',body:JSON.stringify({p_email:c.email,p_name:(c.name || '').slice(0,100),p_source:'Elemental constitution form',p_consent:`Mandatory checkbox: "I'm happy to receive my reading and occasional relevant updates from Ed Nicholls Acupuncture." Submission: ${c.created_at || 'date unavailable'}. Legacy consent confirmed by practice owner on 22 October 2026.`})});count++
+        }
+        after=page.next;document.getElementById('sync-reading-result').textContent=`Processed ${count} reading contacts…`
+       }while(after)
+       await renderSubscribers();document.getElementById('sync-reading-result').textContent=`Import complete: ${count} consented reading records checked. Duplicates and previous unsubscribes were preserved.`
+       }catch(err){document.getElementById('sync-reading-result').textContent=err.message+' Any completed imports are saved; retrying is safe.';btn.disabled=false}
+      }
+      document.getElementById('export-subscribers').onclick=()=>{
+       const cell=v=>'"'+String(v??'').replace(/^[=+@-]/,"'$&").replace(/"/g,'""')+'"'
+       const csv=[['email','first_name','source','consent_recorded_at','consent_text','unsubscribe_url'],...rows.map(r=>[r.email,r.first_name,r.source,r.consent_recorded_at,r.consent_text,'https://book.ednicholls.com/?unsubscribe='+r.unsubscribe_token])].map(r=>r.map(cell).join(',')).join('\r\n')
+       const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='opted-in-subscribers.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)
+      }
+      viewEl.querySelectorAll('[data-unsubscribe]').forEach(btn=>btn.onclick=async()=>{if(!confirm('Unsubscribe this contact from marketing?'))return;btn.disabled=true;try{await authedFetch('rpc/admin_unsubscribe_marketing',{method:'POST',body:JSON.stringify({p_id:btn.dataset.unsubscribe})});renderSubscribers()}catch(err){alert(err.message);btn.disabled=false}})
+      document.getElementById('subscriber-import').onsubmit=async e=>{e.preventDefault();const btn=document.getElementById('subscriber-save');btn.disabled=true;try{
+       const emails=[...new Set(document.getElementById('subscriber-emails').value.split(/\r?\n/).map(x=>x.trim().toLowerCase()).filter(Boolean))]
+       if(emails.some(x=>! /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x)))throw new Error('Use one valid email address per line.')
+       const source=document.getElementById('subscriber-source').value,evidence=document.getElementById('subscriber-evidence').value
+       for(const email of emails) await authedFetch('rpc/admin_record_subscriber',{method:'POST',body:JSON.stringify({p_email:email,p_name:'',p_source:source,p_consent:evidence})})
+       renderSubscribers()
+      }catch(err){document.getElementById('subscriber-error').textContent=err.message+' You can retry safely; existing contacts are not duplicated or resubscribed.';btn.disabled=false}}
+    }
+
+    function openAssignPackageModal(c) {
+      const requestId=crypto.randomUUID()
+      openModal(`<form id="assign-form" class="p-6"><h2 class="display text-2xl mb-2">Assign package credits</h2><p class="mb-5">${esc(c.first_name)} ${esc(c.last_name)} · expires 365 days after assignment.</p>
+      <label class="block mb-3">Package name<input id="assign-name" required maxlength="100" value="In-person package" class="input w-full p-3 rounded-lg"></label>
+      ${state.services.filter(s=>s.active).map(s=>`<label class="block mb-3">${esc(s.name)} credits<input data-credit="${s.id}" type="number" min="0" max="100" step="1" value="0" class="input w-full p-3 rounded-lg"></label>`).join('')}
+      <label class="block mb-3">Amount already paid (£)<input id="assign-paid" type="number" min="0" step="0.01" value="0" required class="input w-full p-3 rounded-lg"></label>
+      <p class="text-sm mb-4">Records an in-person payment; no card is charged. The patient receives a package confirmation email and can sign in using their existing email to redeem credits.</p>
+      <p id="assign-error" role="alert" class="text-red-700 mb-3"></p><button id="assign-submit" class="btn-primary p-3 rounded-lg">Assign credits & email patient</button><button type="button" id="assign-back" class="btn-secondary p-3 rounded-lg ml-2">Back</button></form>`)
+      document.getElementById('assign-back').onclick=()=>openCustomerModal(c.id)
+      document.getElementById('assign-form').onsubmit=async e=>{
+        e.preventDefault();const btn=document.getElementById('assign-submit');btn.disabled=true
+        try {
+          const credits=[...modalContentEl.querySelectorAll('[data-credit]')].map(el=>({service_id:el.dataset.credit,quantity:Number(el.value)})).filter(x=>x.quantity>0)
+          if(!credits.length) throw new Error('Add at least one treatment credit.')
+          await authedFetch('rpc/admin_assign_package',{method:'POST',body:JSON.stringify({p_customer_id:c.id,p_name:document.getElementById('assign-name').value,p_credits:credits,p_amount:Math.round(Number(document.getElementById('assign-paid').value)*100),p_request_id:requestId})})
+          await loadAll();openCustomerModal(c.id);render()
+        } catch(err) {document.getElementById('assign-error').textContent=err.message;btn.disabled=false}
+      }
+    }
+    function openRescheduleModal(b) {
+      const service=svc(b.service_id)
+      openModal(`<form id="move-form" class="p-6"><h2 class="display text-2xl mb-2">Change appointment time</h2><p class="mb-4">Currently ${fmt.dateLong(new Date(b.starts_at))} at ${fmt.time(new Date(b.starts_at))}. All times are UK time.</p>
+      <label class="block mb-4">New date<input id="move-date" type="date" value="${dateKey(new Date(b.starts_at))}" min="${dateKey()}" required class="input p-3 w-full rounded-lg"></label>
+      <label class="block mb-4">Available time<select id="move-time" required class="input p-3 w-full rounded-lg"></select></label>
+      <p class="text-sm mb-4">Keeps the payment and package credit on this appointment. Sends the patient an email with the old and new times.</p><p id="move-error" role="alert" class="text-red-700 mb-3"></p>
+      <button id="move-submit" class="btn-primary p-3 rounded-lg">Change time & email patient</button><button type="button" id="move-back" class="btn-secondary p-3 rounded-lg ml-2">Back</button></form>`)
+      const date=document.getElementById('move-date'), time=document.getElementById('move-time')
+      const refresh=()=>{const slots=clinicSlots({date:date.value,service,rules:state.availabilityRules,overrides:state.availabilityOverrides,bookings:state.bookings.filter(x=>x.id!==b.id),admin:true}).filter(x=>x.available && +x.start!==Date.parse(b.starts_at));time.innerHTML='<option value="">Choose a time</option>'+slots.map(x=>`<option value="${x.start.toISOString()}">${fmt.time(x.start)}</option>`).join('');document.getElementById('move-error').textContent=slots.length?'':'No available times on this date.'}
+      date.onchange=refresh;refresh()
+      document.getElementById('move-back').onclick=()=>openBookingModal(b.id)
+      document.getElementById('move-form').onsubmit=async e=>{e.preventDefault();const btn=document.getElementById('move-submit');btn.disabled=true;try{
+       await authedFetch('rpc/admin_reschedule_booking',{method:'POST',body:JSON.stringify({p_booking_id:b.id,p_expected_start:b.starts_at,p_start:time.value})})
+       await loadAll();openBookingModal(b.id);render()
+      }catch(err){document.getElementById('move-error').textContent=err.message;btn.disabled=false}}
     }
 
     sb.channel('admin-bookings')

@@ -276,12 +276,12 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
     function clearIntent() { localStorage.removeItem(STORAGE_KEY) }
 
     // Raw-fetch helper that bypasses the Supabase JS client (which can hang on auth init)
-    async function rawFetch(path) {
+    async function rawFetch(path, options = {}) {
       const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-        headers: { apikey: SUPABASE_KEY, Accept: 'application/json' }
+        ...options, headers: { apikey: SUPABASE_KEY, Accept: 'application/json', 'Content-Type':'application/json', ...(options.headers || {}) }
       })
       if (!r.ok) throw new Error(`Fetch ${path} failed: ${r.status}`)
-      return r.json()
+      const body=await r.text(); return body ? JSON.parse(body) : null
     }
 
     async function loadInitialData() {
@@ -322,15 +322,19 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       state.customerPackage = null
       if (state.customer) {
         try {
-          const cps = await authedFetch(`customer_packages?select=*&customer_id=eq.${state.customer.id}&status=eq.active&order=purchased_at.desc`)
-          state.customerPackage = (cps || []).find(p => !p.expires_at || Date.parse(p.expires_at) > Date.now()) || null
-        } catch {}
-        if (state.customerPackage) {
-          try {
-            state.customerBalances = await authedFetch(`customer_package_balances?select=*&customer_package_id=eq.${state.customerPackage.id}`) || []
-          } catch { state.customerBalances = [] }
-        }
+          const cps = await authedFetch(`customer_packages?select=*&customer_id=eq.${state.customer.id}&status=eq.active&order=expires_at.asc`)
+          state.allCustomerPackages=(cps || []).filter(p=>Date.parse(p.expires_at)>Date.now())
+          state.allCustomerBalances=await authedFetch('customer_package_balances?select=*') || []
+          selectCustomerPackage(state.allCustomerPackages.find(p=>state.allCustomerBalances.some(b=>b.customer_package_id===p.id && b.sessions_remaining>0)))
+        } catch {state.allCustomerPackages=[];state.allCustomerBalances=[]}
+
       }
+    }
+
+    function selectCustomerPackage(cp) {
+      state.customerPackage=cp || null
+      state.customerBalances=(state.allCustomerBalances || []).filter(b=>b.customer_package_id===cp?.id)
+      if(cp?.custom_name) state.packageContents[cp.id]=state.customerBalances.map(b=>({service_id:b.service_id,quantity:b.sessions_remaining}))
     }
 
     sb.channel('bookings-changes')
@@ -458,7 +462,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         return `
           <div class="card rounded-xl p-5 mb-10 border-l-4" style="border-left-color: var(--accent)">
             <div class="text-xs font-semibold text-[var(--accent)] uppercase tracking-widest mb-1">Your active package</div>
-            <div class="font-semibold mb-1">${esc(p?.name || '')}</div>
+            <div class="font-semibold mb-1">${esc(state.customerPackage?.custom_name || p?.name || '')}</div>
             <div class="text-sm text-[var(--text-muted)]">${balanceLines}</div>
             <div class="text-xs text-[var(--text-muted)] mt-2">Click a session below to book using your package.</div>
           </div>
@@ -521,9 +525,10 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           state.selectedService = state.services.find(s => s.id === btn.dataset.service)
           state.selectedPackage = null
           // If the signed-in user has package sessions remaining for this service, use the package
+          selectCustomerPackage((state.allCustomerPackages || []).find(p=>(state.allCustomerBalances || []).some(b=>b.customer_package_id===p.id && b.service_id===state.selectedService.id && b.sessions_remaining>0)))
           const bal = state.customerBalances?.find(b => b.service_id === state.selectedService.id && b.sessions_remaining > 0)
           if (bal && state.customerPackage) {
-            state.selectedPackage = state.packages.find(p => p.id === state.customerPackage.package_id)
+            state.selectedPackage = (state.packages.find(p => p.id === state.customerPackage.package_id) || {id:state.customerPackage.id,name:state.customerPackage.custom_name})
             state.flow = 'package'
           } else {
             state.customerPackage = null
@@ -1507,6 +1512,8 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       } catch {}
 
 
+      let marketing=false
+      try {marketing=await authedFetch('rpc/my_marketing_preference',{method:'POST',body:'{}'})} catch {}
       const now = new Date()
       const upcoming = bookings.filter(b => b.status !== 'cancelled' && new Date(b.starts_at) >= now).reverse()
       const past = bookings.filter(b => new Date(b.starts_at) < now || b.status === 'completed' || b.status === 'cancelled').slice(0, 10)
@@ -1525,7 +1532,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
         return `
           <div class="card rounded-xl p-5 mb-6 border-l-4" style="border-left-color: var(--accent)">
             <div class="text-xs font-semibold text-[var(--accent)] uppercase tracking-widest mb-1">Active package</div>
-            <div class="font-semibold mb-2">${esc(p?.name || '')}</div>
+            <div class="font-semibold mb-2">${esc(state.customerPackage?.custom_name || p?.name || '')}</div>
             <div class="text-sm">${lines}</div>
             ${expires ? `<div class="text-xs text-[var(--text-muted)] mt-3">Expires ${expires}</div>` : ''}
           </div>
@@ -1553,7 +1560,7 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       viewEl.innerHTML = `
         <div class="view max-w-2xl mx-auto">
           <h1 class="display text-3xl mb-2">Your bookings</h1>
-          <p class="text-[var(--text-muted)] mb-6">Upcoming sessions and your recent history.</p>
+          <p class="text-[var(--text-muted)] mb-6">Upcoming sessions and your recent history.</p><div class="card rounded-xl p-4 mb-6"><label class="flex gap-3 items-start"><input id="marketing-choice" type="checkbox" ${marketing ? 'checked' : ''}><span>I would like occasional news and updates from Ed Nicholls Acupuncture. I can unsubscribe at any time.</span></label><p id="marketing-result" role="status" class="text-sm mt-2"></p></div>
 
           ${packageBanner}
 
@@ -1572,12 +1579,13 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
           ` : ''}
         </div>
       `
+      document.getElementById('marketing-choice').onchange=async e=>{const el=e.target;el.disabled=true;try{await authedFetch('rpc/set_my_marketing_preference',{method:'POST',body:JSON.stringify({p_subscribed:el.checked})});document.getElementById('marketing-result').textContent='Preference saved.'}catch(err){el.checked=!el.checked;document.getElementById('marketing-result').textContent='Could not save. Please try again.'}finally{el.disabled=false}}
       // Wire up the per-service "Book →" buttons in the package banner
       viewEl.querySelectorAll('.pkg-book-btn').forEach(btn => {
         btn.addEventListener('click', () => {
           const svcId = btn.dataset.pkgSvc
           state.selectedService = state.services.find(s => s.id === svcId)
-          state.selectedPackage = state.packages.find(p => p.id === state.customerPackage.package_id)
+          state.selectedPackage = (state.packages.find(p => p.id === state.customerPackage.package_id) || {id:state.customerPackage.id,name:state.customerPackage.custom_name})
           state.flow = 'package'
           setView('date-select')
         })
@@ -1829,6 +1837,12 @@ By confirming below, I affirm my voluntary consent and understanding of the enti
       }
       // Don't depend on data loading or auth — these stand alone.
       const params = new URLSearchParams(window.location.search)
+      if(params.get('unsubscribe')) {
+        const token=params.get('unsubscribe');window.history.replaceState({},'',window.location.pathname)
+        viewEl.innerHTML='<div class="view max-w-md mx-auto"><h1 class="display text-2xl mb-4">Email preferences</h1><p class="mb-4">Stop receiving marketing updates. Appointment emails will continue.</p><button id="unsubscribe-confirm" class="btn-primary p-3 rounded-lg">Unsubscribe</button><p id="unsubscribe-result" role="status"></p></div>'
+        document.getElementById('unsubscribe-confirm').onclick=async e=>{e.target.disabled=true;try{await rawFetch('rpc/unsubscribe_marketing',{method:'POST',body:JSON.stringify({p_token:token})});document.getElementById('unsubscribe-result').textContent='You have been unsubscribed.'}catch{document.getElementById('unsubscribe-result').textContent='Unable to unsubscribe. Please contact acu@ednicholls.com.';e.target.disabled=false}}
+        return
+      }
       const cancelToken = params.get('cancel')
       if (cancelToken) {
         window.history.replaceState({}, '', window.location.pathname)

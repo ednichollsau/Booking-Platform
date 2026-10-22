@@ -14,19 +14,22 @@ async function message(job:any) {
    const cp=await first(`customer_packages?id=eq.${job.reference_id}`)
    if(!cp || cp.status!=='active') return null
    customer=await first(`customers?id=eq.${cp.customer_id}`)
-   const pkg=await first(`packages?id=eq.${cp.package_id}`)
+   const pkg=cp.package_id?await first(`packages?id=eq.${cp.package_id}`):null
    heading='Your package is ready';subject=heading
-   content=`<p>Hi ${esc(customer?.first_name || 'there')},</p><p>${esc(pkg.name)} · paid ${money(cp.amount_paid_pence)}.</p><p>Make your bookings before ${date(cp.expires_at)}. Appointments can take place after the package expires.</p><p><a href="https://book.ednicholls.com/?view=my-bookings">View your package and book</a></p>`
+   content=`<p>Hi ${esc(customer?.first_name || 'there')},</p><p>${esc(cp.custom_name || pkg?.name || 'Your package')} · paid ${money(cp.amount_paid_pence)}.</p><p>Make your bookings before ${date(cp.expires_at)}. Appointments can take place after the package expires.</p><p><a href="https://book.ednicholls.com/?view=my-bookings">View your package and book</a></p>`
  } else {
-   const b=await first(`bookings?id=eq.${job.reference_id}`)
+   const change=job.kind==='reschedule'?await first(`booking_time_changes?id=eq.${job.reference_id}`):null
+   const b=await first(`bookings?id=eq.${change?.booking_id || job.reference_id}`)
+   if(job.kind==='reschedule' && (!change || !b || Date.parse(b.starts_at)!==Date.parse(change.new_starts_at))) return null
    if(!b || (job.kind==='cancellation' ? b.status!=='cancelled' : b.status!=='confirmed')) return null
    if(job.kind==='reminder' && Date.parse(b.starts_at)<=Date.now()) return null
    customer=await first(`customers?id=eq.${b.customer_id}`)
    const service=await first(`services?id=eq.${b.service_id}`)
-   heading=job.kind==='cancellation'?'Booking cancelled':job.kind==='reminder'?'Appointment reminder':'Booking confirmed'
+   heading=job.kind==='cancellation'?'Booking cancelled':job.kind==='reminder'?'Appointment reminder':job.kind==='reschedule'?'Appointment time changed':'Booking confirmed'
    subject=`${heading} — ${date(b.starts_at)} at ${time(b.starts_at)}`
    const paid=(b.notes || '').startsWith('stripe:')
    content=`<p>${esc(service.name)}</p><p><strong>${date(b.starts_at)} at ${time(b.starts_at)}</strong> (UK time)<br>${service.duration_minutes} minutes</p>`
+   if(change) content=`<p>Your appointment has been moved from ${date(change.old_starts_at)} at ${time(change.old_starts_at)} to the time below.</p>`+content
    if(job.kind==='cancellation') content+=`<p>${b.customer_package_id?'The session credit has been returned to your package.':paid?'For a card refund, please contact Ed.':''}</p>`
    else content+=`<p>${b.customer_package_id?'Paid with a package credit.':paid?'Paid online.':`${money(service.price_pence)} payable at the clinic.`}</p>`
    if(job.audience==='admin') content+=`<p>Patient: ${esc([customer?.first_name,customer?.last_name].filter(Boolean).join(' '))}</p><p><a href="https://book.ednicholls.com/admin">Open the admin dashboard for patient details and intake notes</a></p>`

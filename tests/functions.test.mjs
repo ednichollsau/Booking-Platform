@@ -47,3 +47,20 @@ test('transient payment processing errors request a retry rather than reporting 
   assert.equal(response.status,500)
  } finally {globalThis.fetch=old}
 })
+test('change email uses old and new London times across clock change',async()=>{
+ const old=globalThis.fetch;let email
+ secrets.RESEND_API_KEY='test-resend'
+ globalThis.fetch=async(url,options={})=>{
+ const path=String(url)
+ if(path.includes('internal_settings'))return Response.json([{value:'internal'}])
+ if(path.includes('account_deletion_requests'))return Response.json([])
+ if(path.includes('/rpc/claim_notifications'))return Response.json([{id:'job',kind:'reschedule',reference_id:'change',audience:'patient',attempts:1}])
+ if(path.includes('booking_time_changes'))return Response.json([{booking_id:'booking',old_starts_at:'2026-10-22T17:00:00Z',new_starts_at:'2026-10-29T18:00:00Z'}])
+ if(path.includes('/bookings?'))return Response.json([{id:'booking',customer_id:'customer',service_id:'service',status:'confirmed',starts_at:'2026-10-29T18:00:00Z',cancellation_token:'cancel'}])
+ if(path.includes('/customers?'))return Response.json([{email:'patient@example.test',first_name:'Test'}])
+ if(path.includes('/services?'))return Response.json([{name:'Multi',duration_minutes:45,price_pence:3500}])
+ if(path==='https://api.resend.com/emails'){email=JSON.parse(options.body);return Response.json({id:'sent'})}
+ return Response.json([])
+ }
+ try{await notifications(new Request('https://test',{method:'POST',headers:{'X-Internal-Token':'internal'}}));assert.match(email.subject,/Appointment time changed/);assert.match(email.html,/22 October 2026 at 18:00/);assert.match(email.html,/29 October 2026 at 18:00/)}finally{globalThis.fetch=old}
+})

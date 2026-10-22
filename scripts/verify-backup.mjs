@@ -15,9 +15,10 @@ try {
  if(backup.data.pending_checkouts) {
   for(const name of ['booking-integrity','payments','notifications','account-privacy']) await db.exec(await readFile(new URL(`../database/${name}.sql`,import.meta.url),'utf8'))
  }
+ if(backup.data.booking_time_changes) for(const name of ['admin-tools','subscribers']) await db.exec(await readFile(new URL(`../database/${name}.sql`,import.meta.url),'utf8'))
  await db.exec('set session_replication_role=replica')
  for(const user of backup.auth_mapping) await db.query('insert into auth.users(id,email,email_confirmed_at) values($1,$2,$3)',[user.id,user.email,user.email_confirmed_at])
- const order=['services','packages','customers','package_contents','customer_packages','customer_package_balances','bookings','availability_rules','availability_overrides','audit_log','pending_checkouts','notification_jobs','account_deletion_requests']
+ const order=['services','packages','customers','package_contents','customer_packages','customer_package_balances','bookings','availability_rules','availability_overrides','audit_log','pending_checkouts','notification_jobs','account_deletion_requests','booking_time_changes','mailing_subscribers']
  const counts={}
  for(const table of order) {
   const rows=backup.data[table];if(!rows) continue
